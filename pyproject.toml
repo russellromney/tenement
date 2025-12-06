@@ -1,9 +1,42 @@
 [project]
-name = "tenement-docs"
+name = "tenement"
 version = "0.1.0"
-description = "Documentation for tenement - hyperlightweight process hypervisor"
-readme = "docs/index.md"
+description = "Hyperlightweight process hypervisor for single-server deployments"
+readme = "README.md"
 requires-python = ">=3.11"
-dependencies = [
-    "mkdocs-material>=9.7.0",
+license = { text = "Apache-2.0" }
+authors = [{ name = "Russell Romney", email = "russellromney@gmail.com" }]
+keywords = ["cli", "process", "supervisor", "hypervisor", "devops"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Intended Audience :: System Administrators",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: MacOS",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Rust",
+    "Topic :: System :: Systems Administration",
+    "Topic :: Utilities",
 ]
+
+[project.urls]
+Homepage = "https://tenement.dev"
+Repository = "https://github.com/russellromney/tenement"
+Documentation = "https://tenement.dev"
+
+[project.optional-dependencies]
+docs = ["mkdocs-material>=9.7.0"]
+
+[build-system]
+requires = ["maturin>=1.4,<2.0"]
+build-backend = "maturin"
+
+[tool.maturin]
+# Build the CLI binary
+bindings = "bin"
+# Point to the CLI crate
+manifest-path = "cli/Cargo.toml"
+# Strip debug symbols for smaller binary
+strip = true
