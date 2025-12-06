@@ -10,6 +10,14 @@ tenement spawns and supervises processes with Unix socket communication, health 
 curl -LsSf https://tenement.dev/install.sh | sh
 ```
 
+Or with pip/uv:
+
+```bash
+pip install tenement
+# or
+uv tool install tenement
+```
+
 Or with Cargo:
 
 ```bash
