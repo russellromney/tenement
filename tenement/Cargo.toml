@@ -6,6 +6,7 @@ license.workspace = true
 repository.workspace = true
 homepage.workspace = true
 description = "Hyperlightweight process hypervisor for single-server deployments"
+readme = "../README.md"
 
 [lib]
 name = "tenement"
