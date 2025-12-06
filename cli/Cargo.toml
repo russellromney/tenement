@@ -1,0 +1,20 @@
+[package]
+name = "tenement-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "CLI for tenement - hyperlightweight process hypervisor"
+
+[[bin]]
+name = "tenement"
+path = "src/main.rs"
+
+[dependencies]
+tenement = { path = "../tenement" }
+clap.workspace = true
+tokio.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true

@@ -1,0 +1,31 @@
+# Rust
+target/
+Cargo.lock
+
+# MkDocs
+site/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+
+# uv
+.python-version
+uv.lock
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Secrets
+.env
+.env.local
+*.log

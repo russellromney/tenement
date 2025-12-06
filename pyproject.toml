@@ -1,0 +1,9 @@
+[project]
+name = "tenement-docs"
+version = "0.1.0"
+description = "Documentation for tenement - hyperlightweight process hypervisor"
+readme = "docs/index.md"
+requires-python = ">=3.11"
+dependencies = [
+    "mkdocs-material>=9.7.0",
+]
