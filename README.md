@@ -1,5 +1,7 @@
 # tenement
 
+| Note: this is still early alpha
+
 **Hyperlightweight process hypervisor for single-server deployments.**
 
 tenement spawns and supervises processes with Unix socket communication, health checks, and automatic restarts. No Docker, no Kubernetes, no complexity—just fast, simple process management.
