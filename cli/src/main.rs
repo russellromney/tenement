@@ -1,6 +1,10 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use tenement::{Config, Hypervisor};
+use std::path::PathBuf;
+use tenement::{init_db, Config, ConfigStore, Hypervisor, TokenStore};
+
+mod dashboard;
+mod server;
 
 #[derive(Parser)]
 #[command(name = "tenement")]
@@ -12,6 +16,15 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
+    /// Start the HTTP server with dashboard and reverse proxy
+    Serve {
+        /// Port to listen on
+        #[arg(short, long, default_value = "8080")]
+        port: u16,
+        /// Domain for subdomain routing (e.g., example.com)
+        #[arg(short, long, default_value = "localhost")]
+        domain: String,
+    },
     /// Spawn a new process instance
     Spawn {
         /// Process name (from tenement.toml)
@@ -40,6 +53,8 @@ enum Commands {
     },
     /// Show config
     Config,
+    /// Generate a new API token
+    TokenGen,
 }
 
 #[tokio::main]
@@ -49,6 +64,10 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
+        Commands::Serve { port, domain } => {
+            let hypervisor = Hypervisor::from_config_file()?;
+            server::serve(hypervisor, domain, port).await?;
+        }
         Commands::Spawn { process, id } => {
             let hypervisor = Hypervisor::from_config_file()?;
             let socket = hypervisor.spawn(&process, &id).await?;
@@ -108,6 +127,21 @@ async fn main() -> Result<()> {
                     println!("    health: {}", health);
                 }
             }
+        }
+        Commands::TokenGen => {
+            let config = Config::load()?;
+            let db_path = PathBuf::from(&config.settings.data_dir).join("tenement.db");
+            let pool = init_db(&db_path).await?;
+            let config_store = ConfigStore::new(pool);
+            let token_store = TokenStore::new(&config_store);
+
+            let token = token_store.generate_and_store().await?;
+            println!("Generated new API token:");
+            println!();
+            println!("  {}", token);
+            println!();
+            println!("Store this token securely - it cannot be recovered.");
+            println!("Use it in the Authorization header: Bearer {}", token);
         }
     }
 

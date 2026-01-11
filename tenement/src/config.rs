@@ -121,6 +121,16 @@ pub struct RoutingConfig {
     pub path: HashMap<String, String>,
 }
 
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            settings: Settings::default(),
+            process: HashMap::new(),
+            routing: RoutingConfig::default(),
+        }
+    }
+}
+
 impl Config {
     /// Load config from tenement.toml in current directory or parents
     pub fn load() -> Result<Self> {
@@ -302,5 +312,203 @@ command = "./api"
         assert_eq!(config.settings.health_check_interval, 10);
         assert_eq!(config.settings.max_restarts, 3);
         assert_eq!(config.settings.restart_window, 300);
+    }
+
+    #[test]
+    fn test_multiple_processes() {
+        let config_str = r#"
+[process.api]
+command = "./api"
+
+[process.worker]
+command = "./worker"
+socket = "/tmp/worker-{id}.sock"
+
+[process.scheduler]
+command = "./scheduler"
+"#;
+        let config: Config = toml::from_str(config_str).unwrap();
+
+        assert_eq!(config.process.len(), 3);
+        assert!(config.get_process("api").is_some());
+        assert!(config.get_process("worker").is_some());
+        assert!(config.get_process("scheduler").is_some());
+        assert!(config.get_process("nonexistent").is_none());
+    }
+
+    #[test]
+    fn test_process_with_workdir() {
+        let config_str = r#"
+[process.api]
+command = "./api"
+workdir = "/var/app"
+"#;
+        let config: Config = toml::from_str(config_str).unwrap();
+        let api = config.get_process("api").unwrap();
+        assert_eq!(api.workdir, Some(PathBuf::from("/var/app")));
+    }
+
+    #[test]
+    fn test_process_restart_policies() {
+        let config_str = r#"
+[process.always]
+command = "./always"
+restart = "always"
+
+[process.never]
+command = "./never"
+restart = "never"
+
+[process.default]
+command = "./default"
+"#;
+        let config: Config = toml::from_str(config_str).unwrap();
+
+        assert_eq!(config.get_process("always").unwrap().restart, "always");
+        assert_eq!(config.get_process("never").unwrap().restart, "never");
+        assert_eq!(config.get_process("default").unwrap().restart, "on-failure");
+    }
+
+    #[test]
+    fn test_routing_config() {
+        let config_str = r#"
+[process.api]
+command = "./api"
+
+[routing]
+default = "api"
+
+[routing.subdomain]
+"api.example.com" = "api"
+"*.tenant.example.com" = "api"
+
+[routing.path]
+"/api" = "api"
+"/health" = "api"
+"#;
+        let config: Config = toml::from_str(config_str).unwrap();
+
+        assert_eq!(config.routing.default, Some("api".to_string()));
+        assert_eq!(config.routing.subdomain.len(), 2);
+        assert_eq!(config.routing.path.len(), 2);
+        assert_eq!(config.routing.path.get("/api"), Some(&"api".to_string()));
+    }
+
+    #[test]
+    fn test_empty_routing() {
+        let config_str = r#"
+[process.api]
+command = "./api"
+"#;
+        let config: Config = toml::from_str(config_str).unwrap();
+
+        assert!(config.routing.default.is_none());
+        assert!(config.routing.subdomain.is_empty());
+        assert!(config.routing.path.is_empty());
+    }
+
+    #[test]
+    fn test_command_interpolated() {
+        let config_str = r#"
+[process.api]
+command = "./api --id {id} --name {name}"
+"#;
+        let config: Config = toml::from_str(config_str).unwrap();
+        let api = config.get_process("api").unwrap();
+        let data_dir = PathBuf::from("/data");
+
+        let cmd = api.command_interpolated("api", "user123", &data_dir);
+        assert_eq!(cmd, "./api --id user123 --name api");
+    }
+
+    #[test]
+    fn test_args_interpolated() {
+        let config_str = r#"
+[process.api]
+command = "./api"
+args = ["--socket", "{socket}", "--data", "{data_dir}/{id}"]
+"#;
+        let config: Config = toml::from_str(config_str).unwrap();
+        let api = config.get_process("api").unwrap();
+        let data_dir = PathBuf::from("/data");
+
+        let args = api.args_interpolated("api", "user123", &data_dir);
+        assert_eq!(args.len(), 4);
+        assert_eq!(args[0], "--socket");
+        assert_eq!(args[1], "/tmp/api-user123.sock");
+        assert_eq!(args[2], "--data");
+        assert_eq!(args[3], "/data/user123");
+    }
+
+    #[test]
+    fn test_load_from_path() {
+        use std::io::Write;
+
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("tenement.toml");
+
+        let config_content = r#"
+[process.api]
+command = "./api"
+"#;
+        let mut file = std::fs::File::create(&config_path).unwrap();
+        file.write_all(config_content.as_bytes()).unwrap();
+
+        let config = Config::load_from_path(&config_path).unwrap();
+        assert!(config.get_process("api").is_some());
+    }
+
+    #[test]
+    fn test_load_from_nonexistent_path() {
+        let result = Config::load_from_path(std::path::Path::new("/nonexistent/tenement.toml"));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_invalid_toml() {
+        use std::io::Write;
+
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("tenement.toml");
+
+        let config_content = "this is not valid toml [[[";
+        let mut file = std::fs::File::create(&config_path).unwrap();
+        file.write_all(config_content.as_bytes()).unwrap();
+
+        let result = Config::load_from_path(&config_path);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_settings_clone() {
+        let settings = Settings::default();
+        let cloned = settings.clone();
+        assert_eq!(settings.data_dir, cloned.data_dir);
+        assert_eq!(settings.health_check_interval, cloned.health_check_interval);
+    }
+
+    #[test]
+    fn test_config_clone() {
+        let config_str = r#"
+[process.api]
+command = "./api"
+"#;
+        let config: Config = toml::from_str(config_str).unwrap();
+        let cloned = config.clone();
+        assert_eq!(config.process.len(), cloned.process.len());
+    }
+
+    #[test]
+    fn test_process_config_clone() {
+        let config_str = r#"
+[process.api]
+command = "./api"
+health = "/health"
+"#;
+        let config: Config = toml::from_str(config_str).unwrap();
+        let api = config.get_process("api").unwrap();
+        let cloned = api.clone();
+        assert_eq!(api.command, cloned.command);
+        assert_eq!(api.health, cloned.health);
     }
 }

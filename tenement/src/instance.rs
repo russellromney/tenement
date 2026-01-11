@@ -2,8 +2,8 @@
 
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
-use std::process::Child;
 use std::time::Instant;
+use tokio::process::Child;
 
 /// Unique identifier for an instance: "process_name:id"
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -152,5 +152,128 @@ mod tests {
         let id = InstanceId::parse("api:user:with:colons").unwrap();
         assert_eq!(id.process, "api");
         assert_eq!(id.id, "user:with:colons");
+    }
+
+    #[test]
+    fn test_instance_id_new() {
+        let id = InstanceId::new("myprocess", "myid");
+        assert_eq!(id.process, "myprocess");
+        assert_eq!(id.id, "myid");
+    }
+
+    #[test]
+    fn test_instance_id_equality() {
+        let id1 = InstanceId::new("api", "user1");
+        let id2 = InstanceId::new("api", "user1");
+        let id3 = InstanceId::new("api", "user2");
+
+        assert_eq!(id1, id2);
+        assert_ne!(id1, id3);
+    }
+
+    #[test]
+    fn test_instance_id_hash() {
+        use std::collections::HashSet;
+
+        let mut set = HashSet::new();
+        set.insert(InstanceId::new("api", "user1"));
+        set.insert(InstanceId::new("api", "user1")); // duplicate
+        set.insert(InstanceId::new("api", "user2"));
+
+        assert_eq!(set.len(), 2);
+    }
+
+    #[test]
+    fn test_instance_id_parse_empty_id() {
+        let id = InstanceId::parse("api:").unwrap();
+        assert_eq!(id.process, "api");
+        assert_eq!(id.id, "");
+    }
+
+    #[test]
+    fn test_health_status_display() {
+        assert_eq!(HealthStatus::Unknown.to_string(), "unknown");
+        assert_eq!(HealthStatus::Healthy.to_string(), "healthy");
+        assert_eq!(HealthStatus::Degraded.to_string(), "degraded");
+        assert_eq!(HealthStatus::Unhealthy.to_string(), "unhealthy");
+        assert_eq!(HealthStatus::Failed.to_string(), "failed");
+    }
+
+    #[test]
+    fn test_instance_status_display() {
+        assert_eq!(InstanceStatus::Running.to_string(), "running");
+        assert_eq!(InstanceStatus::Stopped.to_string(), "stopped");
+        assert_eq!(InstanceStatus::Starting.to_string(), "starting");
+        assert_eq!(InstanceStatus::Stopping.to_string(), "stopping");
+    }
+
+    #[test]
+    fn test_health_status_equality() {
+        assert_eq!(HealthStatus::Healthy, HealthStatus::Healthy);
+        assert_ne!(HealthStatus::Healthy, HealthStatus::Unhealthy);
+    }
+
+    #[test]
+    fn test_instance_status_equality() {
+        assert_eq!(InstanceStatus::Running, InstanceStatus::Running);
+        assert_ne!(InstanceStatus::Running, InstanceStatus::Stopped);
+    }
+
+    #[test]
+    fn test_health_status_clone() {
+        let status = HealthStatus::Degraded;
+        let cloned = status.clone();
+        assert_eq!(status, cloned);
+    }
+
+    #[test]
+    fn test_instance_status_clone() {
+        let status = InstanceStatus::Starting;
+        let cloned = status.clone();
+        assert_eq!(status, cloned);
+    }
+
+    #[test]
+    fn test_instance_id_serialize() {
+        let id = InstanceId::new("api", "user123");
+        let json = serde_json::to_string(&id).unwrap();
+        assert!(json.contains("api"));
+        assert!(json.contains("user123"));
+    }
+
+    #[test]
+    fn test_instance_id_deserialize() {
+        let json = r#"{"process":"api","id":"user123"}"#;
+        let id: InstanceId = serde_json::from_str(json).unwrap();
+        assert_eq!(id.process, "api");
+        assert_eq!(id.id, "user123");
+    }
+
+    #[test]
+    fn test_health_status_serialize() {
+        let status = HealthStatus::Healthy;
+        let json = serde_json::to_string(&status).unwrap();
+        assert_eq!(json, "\"healthy\"");
+    }
+
+    #[test]
+    fn test_health_status_deserialize() {
+        let json = "\"unhealthy\"";
+        let status: HealthStatus = serde_json::from_str(json).unwrap();
+        assert_eq!(status, HealthStatus::Unhealthy);
+    }
+
+    #[test]
+    fn test_instance_status_serialize() {
+        let status = InstanceStatus::Running;
+        let json = serde_json::to_string(&status).unwrap();
+        assert_eq!(json, "\"running\"");
+    }
+
+    #[test]
+    fn test_instance_status_deserialize() {
+        let json = "\"stopped\"";
+        let status: InstanceStatus = serde_json::from_str(json).unwrap();
+        assert_eq!(status, InstanceStatus::Stopped);
     }
 }

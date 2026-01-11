@@ -1,4 +1,4 @@
-.PHONY: build build-cli build-docs test clean deploy deploy-docs serve help
+.PHONY: build build-cli build-docs test clean deploy deploy-docs serve help publish publish-cli publish-all fmt lint check
 
 # CLI (Rust)
 build: build-cli
@@ -50,5 +50,29 @@ help:
 	@echo "  Combined:"
 	@echo "    make deploy     - Build CLI and deploy docs"
 	@echo "    make clean      - Remove all build artifacts"
+
+# Publishing
+publish:
+	@echo "Publishing tenement library to crates.io..."
+	cd tenement && cargo publish
+
+publish-cli:
+	@echo "Publishing tenement-cli to crates.io..."
+	cd cli && cargo publish
+
+publish-all: publish
+	@echo "Waiting for crates.io to index the library..."
+	@sleep 30
+	$(MAKE) publish-cli
+
+# Code quality
+fmt:
+	cargo fmt
+
+lint:
+	cargo clippy -- -D warnings
+
+check:
+	cargo check
 
 .DEFAULT_GOAL := help

@@ -2,12 +2,16 @@
 
 use crate::config::Config;
 use crate::instance::{HealthStatus, Instance, InstanceId, InstanceInfo};
+use crate::logs::LogBuffer;
+use crate::metrics::Metrics;
 use anyhow::{Context, Result};
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::process::Command;
 use tokio::sync::RwLock;
 use tracing::{error, info, warn};
 
@@ -17,6 +21,8 @@ const HEALTH_CHECK_TIMEOUT: Duration = Duration::from_secs(5);
 pub struct Hypervisor {
     config: Config,
     instances: RwLock<HashMap<InstanceId, Instance>>,
+    log_buffer: Arc<LogBuffer>,
+    metrics: Arc<Metrics>,
 }
 
 impl Hypervisor {
@@ -25,7 +31,29 @@ impl Hypervisor {
         Arc::new(Self {
             config,
             instances: RwLock::new(HashMap::new()),
+            log_buffer: LogBuffer::new(),
+            metrics: Metrics::new(),
         })
+    }
+
+    /// Create a new hypervisor with a custom log buffer
+    pub fn with_log_buffer(config: Config, log_buffer: Arc<LogBuffer>) -> Arc<Self> {
+        Arc::new(Self {
+            config,
+            instances: RwLock::new(HashMap::new()),
+            log_buffer,
+            metrics: Metrics::new(),
+        })
+    }
+
+    /// Get the log buffer
+    pub fn log_buffer(&self) -> Arc<LogBuffer> {
+        self.log_buffer.clone()
+    }
+
+    /// Get the metrics
+    pub fn metrics(&self) -> Arc<Metrics> {
+        self.metrics.clone()
     }
 
     /// Load config from tenement.toml and create hypervisor
@@ -92,15 +120,48 @@ impl Hypervisor {
         cmd.args(&args)
             .envs(&env)
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
+            .stderr(Stdio::piped())
+            .kill_on_drop(true);
 
         if let Some(workdir) = &process_config.workdir {
             cmd.current_dir(workdir);
         }
 
-        let child = cmd
+        let mut child = cmd
             .spawn()
             .with_context(|| format!("Failed to spawn process: {}", command))?;
+
+        // Take stdout/stderr handles and spawn capture tasks
+        let stdout = child.stdout.take();
+        let stderr = child.stderr.take();
+
+        // Spawn stdout capture task
+        if let Some(stdout) = stdout {
+            let log_buffer = self.log_buffer.clone();
+            let process = process_name.to_string();
+            let inst_id = id.to_string();
+            tokio::spawn(async move {
+                let reader = BufReader::new(stdout);
+                let mut lines = reader.lines();
+                while let Ok(Some(line)) = lines.next_line().await {
+                    log_buffer.push_stdout(&process, &inst_id, line).await;
+                }
+            });
+        }
+
+        // Spawn stderr capture task
+        if let Some(stderr) = stderr {
+            let log_buffer = self.log_buffer.clone();
+            let process = process_name.to_string();
+            let inst_id = id.to_string();
+            tokio::spawn(async move {
+                let reader = BufReader::new(stderr);
+                let mut lines = reader.lines();
+                while let Ok(Some(line)) = lines.next_line().await {
+                    log_buffer.push_stderr(&process, &inst_id, line).await;
+                }
+            });
+        }
 
         let instance = Instance {
             id: instance_id.clone(),
@@ -118,6 +179,9 @@ impl Hypervisor {
             let mut instances = self.instances.write().await;
             instances.insert(instance_id.clone(), instance);
         }
+
+        // Update metrics
+        self.metrics.instances_up.inc();
 
         // Wait for socket to be created
         for _ in 0..50 {
@@ -144,12 +208,16 @@ impl Hypervisor {
             instance
                 .child
                 .kill()
+                .await
                 .with_context(|| format!("Failed to kill process: {}", instance_id))?;
 
             // Clean up socket
             if instance.socket.exists() {
                 std::fs::remove_file(&instance.socket).ok();
             }
+
+            // Update metrics
+            self.metrics.instances_up.dec();
 
             Ok(())
         } else {
@@ -184,6 +252,13 @@ impl Hypervisor {
                 instance.restart_times.retain(|t| t.elapsed() < window);
             }
         }
+
+        // Update metrics
+        let mut labels = HashMap::new();
+        labels.insert("process".to_string(), process_name.to_string());
+        labels.insert("id".to_string(), id.to_string());
+        let counter = self.metrics.instance_restarts.with_labels(&labels).await;
+        counter.inc();
 
         Ok(socket)
     }
