@@ -101,7 +101,13 @@ isolation = "namespace"      # Isolation: process, namespace, sandbox
 # Resource limits (cgroups v2, Linux only)
 memory_limit_mb = 256        # Memory limit in MB
 cpu_shares = 100             # CPU weight (1-10000)
+
+# Instances to spawn on startup
+[instances]
+api = ["prod", "staging"]    # Spawn api:prod and api:staging on boot
 ```
+
+**Instance auto-start:** Instances listed in `[instances]` spawn automatically when `ten serve` starts. Individual spawn failures are logged but don't block other instances.
 
 **Hibernation:** Set `idle_timeout` to auto-stop idle instances. They wake automatically on first request.
 
@@ -267,8 +273,13 @@ See [ROADMAP.md](ROADMAP.md) for the full isolation spectrum vision.
   - Prometheus metrics: `instance_storage_bytes`, `instance_storage_quota_bytes`, `instance_storage_usage_ratio`
   - API: `GET /api/instances/:id/storage`
   - Dashboard: Storage column with color-coded usage
+- Instance auto-start - Declare instances in `[instances]` that spawn on `ten serve`
+  - Config: `[instances]` section maps services to instance IDs
+  - Validates references to defined services at config load time
+  - Continues spawning on individual failures (logs errors, doesn't block)
 
 **Next up:**
+- Production setup (`ten install`, `ten caddy`) - One-command deployment with HTTPS
 - Cgroup lifecycle tests (Session 5) - Linux-only cgroup verification
 - WASM runtime (wasmtime) - Lightweight compute sandbox
 

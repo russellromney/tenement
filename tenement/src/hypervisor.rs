@@ -720,6 +720,55 @@ impl Hypervisor {
         }
     }
 
+    /// Spawn all instances configured in [instances] section.
+    /// Called on server startup to auto-start configured instances.
+    /// Continues spawning even if some fail, logs errors for failures.
+    /// Returns the number of successfully spawned instances.
+    pub async fn spawn_configured_instances(&self) -> (usize, usize) {
+        let instances_to_spawn = self.config.get_instances_to_spawn();
+
+        if instances_to_spawn.is_empty() {
+            return (0, 0);
+        }
+
+        info!("Auto-spawning {} configured instance(s)", instances_to_spawn.len());
+
+        let mut success_count = 0;
+        let mut fail_count = 0;
+
+        for (service_name, instance_id) in instances_to_spawn {
+            info!("Auto-spawning {}:{}", service_name, instance_id);
+
+            match self.spawn(&service_name, &instance_id).await {
+                Ok(socket) => {
+                    info!(
+                        "Successfully spawned {}:{} at {:?}",
+                        service_name, instance_id, socket
+                    );
+                    success_count += 1;
+                }
+                Err(e) => {
+                    error!(
+                        "Failed to spawn {}:{}: {}",
+                        service_name, instance_id, e
+                    );
+                    fail_count += 1;
+                }
+            }
+        }
+
+        if fail_count > 0 {
+            warn!(
+                "Auto-spawn complete: {} succeeded, {} failed",
+                success_count, fail_count
+            );
+        } else {
+            info!("Auto-spawn complete: {} instance(s) started", success_count);
+        }
+
+        (success_count, fail_count)
+    }
+
     /// Spawn instance if not running, and wait for it to be ready.
     /// Returns the socket path. Use this for wake-on-request.
     /// Uses the process's configured startup_timeout (default: 10s).
@@ -1460,5 +1509,113 @@ sleep 30
 
         let logs = hypervisor.log_buffer().query(&crate::logs::LogQuery::default()).await;
         assert!(logs.iter().any(|l| l.message.contains("SOCKET_PATH=")));
+    }
+
+    // ===================
+    // AUTO-SPAWN TESTS
+    // ===================
+
+    #[tokio::test]
+    async fn test_spawn_configured_instances_empty() {
+        let config = Config::default();
+        let hypervisor = Hypervisor::new(config);
+
+        let (success, failed) = hypervisor.spawn_configured_instances().await;
+
+        assert_eq!(success, 0);
+        assert_eq!(failed, 0);
+        assert!(hypervisor.list().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_spawn_configured_instances_single() {
+        let dir = TempDir::new().unwrap();
+        let script = create_touch_socket_script(dir.path());
+
+        let mut config = test_config_with_process("api", script.to_str().unwrap(), vec![]);
+        config.instances.insert("api".to_string(), vec!["prod".to_string()]);
+        let hypervisor = Hypervisor::new(config);
+
+        let (success, failed) = hypervisor.spawn_configured_instances().await;
+
+        assert_eq!(success, 1);
+        assert_eq!(failed, 0);
+        assert!(hypervisor.is_running("api", "prod").await);
+
+        hypervisor.stop("api", "prod").await.ok();
+    }
+
+    #[tokio::test]
+    async fn test_spawn_configured_instances_multiple() {
+        let dir = TempDir::new().unwrap();
+        let script = create_touch_socket_script(dir.path());
+
+        let mut config = test_config_with_process("api", script.to_str().unwrap(), vec![]);
+        config.instances.insert(
+            "api".to_string(),
+            vec!["prod".to_string(), "staging".to_string()],
+        );
+        let hypervisor = Hypervisor::new(config);
+
+        let (success, failed) = hypervisor.spawn_configured_instances().await;
+
+        assert_eq!(success, 2);
+        assert_eq!(failed, 0);
+        assert!(hypervisor.is_running("api", "prod").await);
+        assert!(hypervisor.is_running("api", "staging").await);
+
+        hypervisor.stop("api", "prod").await.ok();
+        hypervisor.stop("api", "staging").await.ok();
+    }
+
+    #[tokio::test]
+    async fn test_spawn_configured_instances_continues_on_failure() {
+        let dir = TempDir::new().unwrap();
+        let script = create_touch_socket_script(dir.path());
+
+        let mut config = test_config_with_process("api", script.to_str().unwrap(), vec![]);
+        // Add a second service with an invalid command
+        config.service.insert(
+            "broken".to_string(),
+            ProcessConfig {
+                command: "/nonexistent/binary".to_string(),
+                args: vec![],
+                socket: "/tmp/{name}-{id}.sock".to_string(),
+                isolation: RuntimeType::Process,
+                health: None,
+                env: HashMap::new(),
+                workdir: None,
+                restart: "on-failure".to_string(),
+                idle_timeout: None,
+                startup_timeout: 5,
+                memory_limit_mb: None,
+                cpu_shares: None,
+                kernel: None,
+                rootfs: None,
+                memory_mb: 256,
+                vcpus: 1,
+                vsock_port: 5000,
+                storage_quota_mb: None,
+                storage_persist: false,
+            },
+        );
+
+        // Configure both to spawn
+        config.instances.insert("api".to_string(), vec!["prod".to_string()]);
+        config.instances.insert("broken".to_string(), vec!["test".to_string()]);
+
+        let hypervisor = Hypervisor::new(config);
+
+        let (success, failed) = hypervisor.spawn_configured_instances().await;
+
+        // One succeeded, one failed
+        assert_eq!(success, 1);
+        assert_eq!(failed, 1);
+
+        // The good one should still be running
+        assert!(hypervisor.is_running("api", "prod").await);
+        assert!(!hypervisor.is_running("broken", "test").await);
+
+        hypervisor.stop("api", "prod").await.ok();
     }
 }

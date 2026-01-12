@@ -17,6 +17,9 @@ struct RawConfig {
     process: HashMap<String, ProcessConfig>,
     #[serde(default)]
     routing: RoutingConfig,
+    /// Instances to auto-spawn on boot
+    #[serde(default)]
+    instances: HashMap<String, Vec<String>>,
 }
 
 /// Main configuration structure
@@ -37,6 +40,12 @@ pub struct Config {
     /// Routing rules
     #[serde(default)]
     pub routing: RoutingConfig,
+
+    /// Instances to auto-spawn on boot
+    /// Maps service name to list of instance IDs
+    /// Example: { "api": ["prod"], "worker": ["bg-1", "bg-2"] }
+    #[serde(default)]
+    pub instances: HashMap<String, Vec<String>>,
 }
 
 
@@ -247,6 +256,7 @@ impl Default for Config {
             settings: Settings::default(),
             service: HashMap::new(),
             routing: RoutingConfig::default(),
+            instances: HashMap::new(),
         }
     }
 }
@@ -288,10 +298,22 @@ impl Config {
             service.insert(name, config);
         }
 
+        // Validate instances reference defined services
+        for (service_name, _instance_ids) in &raw.instances {
+            if !service.contains_key(service_name) {
+                anyhow::bail!(
+                    "Instance references undefined service '{}'. \
+                    Define it in [service.{}] first.",
+                    service_name, service_name
+                );
+            }
+        }
+
         Ok(Config {
             settings: raw.settings,
             service,
             routing: raw.routing,
+            instances: raw.instances,
         })
     }
 
@@ -325,6 +347,23 @@ impl Config {
     #[deprecated(since = "0.4.0", note = "Use get_service() instead")]
     pub fn get_process(&self, name: &str) -> Option<&ProcessConfig> {
         self.get_service(name)
+    }
+
+    /// Get all configured instances to spawn on boot
+    /// Returns pairs of (service_name, instance_id)
+    pub fn get_instances_to_spawn(&self) -> Vec<(String, String)> {
+        let mut result = Vec::new();
+        for (service_name, instance_ids) in &self.instances {
+            for instance_id in instance_ids {
+                result.push((service_name.clone(), instance_id.clone()));
+            }
+        }
+        result
+    }
+
+    /// Check if any instances are configured for auto-spawn
+    pub fn has_instances_to_spawn(&self) -> bool {
+        self.instances.values().any(|ids| !ids.is_empty())
     }
 }
 
@@ -1113,5 +1152,199 @@ storage_quota_mb = 102400
 
         // 100GB quota
         assert_eq!(api.storage_quota_mb, Some(102400));
+    }
+
+    // ===================
+    // INSTANCE AUTO-START TESTS
+    // ===================
+
+    #[test]
+    fn test_instances_section_basic() {
+        let config_str = r#"
+[service.api]
+command = "./api"
+
+[service.worker]
+command = "./worker"
+
+[instances]
+api = ["prod"]
+worker = ["bg-1", "bg-2"]
+"#;
+        let config = Config::from_str(config_str).unwrap();
+
+        assert_eq!(config.instances.len(), 2);
+        assert_eq!(config.instances.get("api"), Some(&vec!["prod".to_string()]));
+        assert_eq!(
+            config.instances.get("worker"),
+            Some(&vec!["bg-1".to_string(), "bg-2".to_string()])
+        );
+    }
+
+    #[test]
+    fn test_instances_section_empty() {
+        let config_str = r#"
+[service.api]
+command = "./api"
+
+[instances]
+"#;
+        let config = Config::from_str(config_str).unwrap();
+
+        assert!(config.instances.is_empty());
+        assert!(!config.has_instances_to_spawn());
+    }
+
+    #[test]
+    fn test_instances_section_missing() {
+        let config_str = r#"
+[service.api]
+command = "./api"
+"#;
+        let config = Config::from_str(config_str).unwrap();
+
+        assert!(config.instances.is_empty());
+        assert!(!config.has_instances_to_spawn());
+    }
+
+    #[test]
+    fn test_instances_references_undefined_service_fails() {
+        let config_str = r#"
+[service.api]
+command = "./api"
+
+[instances]
+worker = ["bg-1"]
+"#;
+        let result = Config::from_str(config_str);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("undefined service"));
+        assert!(err.contains("worker"));
+    }
+
+    #[test]
+    fn test_get_instances_to_spawn() {
+        let config_str = r#"
+[service.api]
+command = "./api"
+
+[service.worker]
+command = "./worker"
+
+[instances]
+api = ["prod", "staging"]
+worker = ["bg-1"]
+"#;
+        let config = Config::from_str(config_str).unwrap();
+        let instances = config.get_instances_to_spawn();
+
+        assert_eq!(instances.len(), 3);
+
+        // Check all expected instances are present (order may vary due to HashMap)
+        assert!(instances.contains(&("api".to_string(), "prod".to_string())));
+        assert!(instances.contains(&("api".to_string(), "staging".to_string())));
+        assert!(instances.contains(&("worker".to_string(), "bg-1".to_string())));
+    }
+
+    #[test]
+    fn test_has_instances_to_spawn() {
+        // No instances section
+        let config_str = r#"
+[service.api]
+command = "./api"
+"#;
+        let config = Config::from_str(config_str).unwrap();
+        assert!(!config.has_instances_to_spawn());
+
+        // Empty instances
+        let config_str = r#"
+[service.api]
+command = "./api"
+
+[instances]
+api = []
+"#;
+        let config = Config::from_str(config_str).unwrap();
+        assert!(!config.has_instances_to_spawn());
+
+        // With instances
+        let config_str = r#"
+[service.api]
+command = "./api"
+
+[instances]
+api = ["prod"]
+"#;
+        let config = Config::from_str(config_str).unwrap();
+        assert!(config.has_instances_to_spawn());
+    }
+
+    #[test]
+    fn test_instances_with_single_id() {
+        let config_str = r#"
+[service.api]
+command = "./api"
+
+[instances]
+api = ["prod"]
+"#;
+        let config = Config::from_str(config_str).unwrap();
+
+        assert_eq!(config.instances.len(), 1);
+        let instances = config.get_instances_to_spawn();
+        assert_eq!(instances.len(), 1);
+        assert_eq!(instances[0], ("api".to_string(), "prod".to_string()));
+    }
+
+    #[test]
+    fn test_instances_empty_list() {
+        let config_str = r#"
+[service.api]
+command = "./api"
+
+[instances]
+api = []
+"#;
+        let config = Config::from_str(config_str).unwrap();
+
+        assert_eq!(config.instances.len(), 1);
+        assert_eq!(config.instances.get("api"), Some(&vec![]));
+
+        let instances = config.get_instances_to_spawn();
+        assert!(instances.is_empty());
+    }
+
+    #[test]
+    fn test_instances_multiple_services_multiple_ids() {
+        let config_str = r#"
+[service.api]
+command = "./api"
+
+[service.web]
+command = "./web"
+
+[service.worker]
+command = "./worker"
+
+[instances]
+api = ["prod"]
+web = ["prod", "staging"]
+worker = ["bg-1", "bg-2", "bg-3"]
+"#;
+        let config = Config::from_str(config_str).unwrap();
+
+        assert_eq!(config.instances.len(), 3);
+
+        let instances = config.get_instances_to_spawn();
+        assert_eq!(instances.len(), 6); // 1 + 2 + 3
+
+        // Verify all are present
+        assert!(instances.contains(&("api".to_string(), "prod".to_string())));
+        assert!(instances.contains(&("web".to_string(), "prod".to_string())));
+        assert!(instances.contains(&("web".to_string(), "staging".to_string())));
+        assert!(instances.contains(&("worker".to_string(), "bg-1".to_string())));
+        assert!(instances.contains(&("worker".to_string(), "bg-2".to_string())));
+        assert!(instances.contains(&("worker".to_string(), "bg-3".to_string())));
     }
 }

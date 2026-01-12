@@ -114,6 +114,20 @@ pub async fn serve(
     port: u16,
     config_store: Arc<ConfigStore>,
 ) -> Result<()> {
+    // Spawn configured instances before accepting connections
+    let (success, failed) = hypervisor.spawn_configured_instances().await;
+    if failed > 0 {
+        tracing::warn!(
+            "Auto-spawn: {} succeeded, {} failed - check logs for details",
+            success, failed
+        );
+    } else if success > 0 {
+        tracing::info!("Auto-spawn: {} instance(s) started", success);
+    }
+
+    // Start health monitor
+    hypervisor.clone().start_monitor();
+
     let client = Client::builder(TokioExecutor::new()).build_http();
 
     let state = AppState {

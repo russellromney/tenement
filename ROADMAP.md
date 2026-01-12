@@ -386,6 +386,150 @@ instance_storage_usage_ratio{process="api",instance="prod"} 0.25
 - Storage column with color coding (<70% green, 70-90% yellow, >90% red)
 - Display: "134MB / 512MB" (or "134MB" if no quota)
 
+### Phase 8.9: Instance Auto-Start (v0.8.9)
+
+Declare instances in config that spawn automatically on tenement boot.
+
+**Problem:** Currently, after tenement restarts, all instances are gone. Users must manually run `ten spawn` commands or write wrapper scripts.
+
+**Solution:** Add `[instances]` section to `tenement.toml` that declares which instances to spawn on startup.
+
+**Config:**
+```toml
+# tenement.toml
+
+[service.api]
+command = "uv run python app.py"
+socket = "/tmp/tenement/api-{id}.sock"
+health = "/health"
+
+[service.web]
+command = "bun run server.ts"
+socket = "/tmp/tenement/web-{id}.sock"
+health = "/health"
+
+[service.worker]
+command = "./worker"
+socket = "/tmp/tenement/worker-{id}.sock"
+
+# Instances to spawn on boot
+[instances]
+api = ["prod"]                    # spawn api:prod
+web = ["prod", "staging"]         # spawn web:prod and web:staging
+worker = ["bg-1", "bg-2", "bg-3"] # spawn 3 worker instances
+```
+
+**Implementation:**
+- [x] Add `instances: HashMap<String, Vec<String>>` to Config struct
+- [x] Parse `[instances]` section in config.rs
+- [x] Add `spawn_configured_instances()` to Hypervisor
+- [x] Call on startup in `ten serve` before accepting connections
+- [x] Validate instance references point to defined services
+- [x] Log spawned instances on startup
+- [x] Add tests for config parsing and auto-spawn behavior (14 tests)
+
+**CLI behavior:**
+```bash
+ten serve --port 8080
+# Output:
+# [INFO] Loading config from tenement.toml
+# [INFO] Auto-spawning api:prod
+# [INFO] Auto-spawning web:prod
+# [INFO] Auto-spawning web:staging
+# [INFO] Auto-spawning worker:bg-1
+# [INFO] Auto-spawning worker:bg-2
+# [INFO] Auto-spawning worker:bg-3
+# [INFO] Listening on 0.0.0.0:8080
+```
+
+**Edge cases:**
+- Empty `[instances]` section: no auto-spawn (explicit opt-out)
+- Missing `[instances]` section: no auto-spawn (backwards compatible)
+- Instance references undefined service: error on startup with clear message
+- Spawn failure: log error, continue spawning others, report summary
+
+### Phase 8.10: Production Setup (v0.8.10)
+
+One-command production deployment with HTTPS.
+
+#### `ten install` - systemd integration
+
+Generate and install systemd unit to run tenement as a service.
+
+```bash
+ten install --domain example.com --port 8080
+# [INFO] Creating /etc/systemd/system/tenement.service
+# [INFO] Enabling tenement service
+# [INFO] Starting tenement service
+# [OK] Tenement running at http://localhost:8080
+```
+
+**Implementation:**
+- [ ] Add `install` subcommand to CLI
+- [ ] Generate systemd unit file from template
+- [ ] Copy binary to `/usr/local/bin/ten` (or use current location)
+- [ ] Create working directory `/var/lib/tenement/`
+- [ ] Copy config to `/etc/tenement/tenement.toml`
+- [ ] Run `systemctl daemon-reload && systemctl enable tenement`
+- [ ] Start service and verify health
+- [ ] Add `ten uninstall` to remove service
+
+**Generated unit:**
+```ini
+# /etc/systemd/system/tenement.service
+[Unit]
+Description=Tenement Process Supervisor
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/ten serve --port 8080 --domain example.com
+WorkingDirectory=/var/lib/tenement
+Restart=always
+RestartSec=5
+Environment=TENEMENT_CONFIG=/etc/tenement/tenement.toml
+
+[Install]
+WantedBy=multi-user.target
+```
+
+#### Caddy integration - automatic HTTPS
+
+Generate Caddyfile and optionally install/configure Caddy.
+
+```bash
+ten caddy --domain example.com
+# Generates Caddyfile for reverse proxy to tenement
+```
+
+**Implementation:**
+- [ ] Add `caddy` subcommand to CLI
+- [ ] Generate Caddyfile with reverse_proxy to tenement port
+- [ ] Support wildcard subdomains for instance routing
+- [ ] Optional: `ten caddy --install` to install Caddy via package manager
+- [ ] Optional: `ten caddy --systemd` to enable Caddy service
+
+**Generated Caddyfile:**
+```
+# /etc/caddy/Caddyfile
+example.com, *.example.com {
+    reverse_proxy localhost:8080
+}
+```
+
+**Full production setup:**
+```bash
+# One-time setup
+ten install --domain example.com --port 8080
+ten caddy --domain example.com --install --systemd
+
+# Result:
+# - tenement running as systemd service on :8080
+# - Caddy running as systemd service on :443/:80
+# - Auto HTTPS with Let's Encrypt
+# - *.example.com routes to tenement instances
+```
+
 ### Phase 9: Slum - Multi-Provider Orchestration (v0.9)
 
 Fleet orchestration across multiple tenements on different providers.
