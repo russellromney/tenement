@@ -1,0 +1,28 @@
+<svg viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg">
+  <!-- Solid teal building centered and sized for UI -->
+
+  <!-- Building -->
+  <rect x="40" y="55" width="120" height="105" rx="4" fill="#2dd4bf"/>
+
+  <!-- Roof -->
+  <polygon points="40,55 100,25 160,55" fill="#2dd4bf"/>
+
+  <!-- Windows 3x3 (darker teal for contrast) -->
+  <!-- Row 1 -->
+  <rect x="52" y="68" width="16" height="16" fill="#0d9488"/>
+  <rect x="92" y="68" width="16" height="16" fill="#0d9488"/>
+  <rect x="132" y="68" width="16" height="16" fill="#0d9488"/>
+
+  <!-- Row 2 -->
+  <rect x="52" y="100" width="16" height="16" fill="#0d9488"/>
+  <rect x="92" y="100" width="16" height="16" fill="#0d9488"/>
+  <rect x="132" y="100" width="16" height="16" fill="#0d9488"/>
+
+  <!-- Row 3 -->
+  <rect x="52" y="132" width="16" height="16" fill="#0d9488"/>
+  <rect x="92" y="132" width="16" height="16" fill="#0d9488"/>
+  <rect x="132" y="132" width="16" height="16" fill="#0d9488"/>
+
+  <!-- Door -->
+  <rect x="90" y="155" width="20" height="25" fill="#0d9488"/>
+</svg>

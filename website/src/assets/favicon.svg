@@ -1,0 +1,20 @@
+<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+  <!-- Building icon for favicon - solid teal with darker accents -->
+
+  <!-- Building -->
+  <rect x="15" y="30" width="70" height="60" rx="2" fill="#2dd4bf"/>
+
+  <!-- Roof -->
+  <polygon points="15,30 50,10 85,30" fill="#2dd4bf"/>
+
+  <!-- Windows (darker teal for contrast) -->
+  <rect x="22" y="40" width="10" height="10" fill="#0d9488"/>
+  <rect x="38" y="40" width="10" height="10" fill="#0d9488"/>
+  <rect x="54" y="40" width="10" height="10" fill="#0d9488"/>
+  <rect x="22" y="58" width="10" height="10" fill="#0d9488"/>
+  <rect x="38" y="58" width="10" height="10" fill="#0d9488"/>
+  <rect x="54" y="58" width="10" height="10" fill="#0d9488"/>
+
+  <!-- Door -->
+  <rect x="44" y="78" width="12" height="15" fill="#0d9488"/>
+</svg>

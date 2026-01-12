@@ -53,6 +53,9 @@
   --color-text-primary: #0f172a;
   --color-text-secondary: #334155;
   --color-text-muted: #64748b;
+  --color-primary: #0d9488; /* Darker teal for light mode */
+  --color-primary-dark: #115e59;
+  --color-primary-light: #ccfbf1;
 }
 
 /* Global Styles */
@@ -193,6 +196,41 @@ blockquote {
 }
 
 /* Starlight Overrides */
+
+/* Table of Contents spacing fix */
+.table-of-contents ul {
+  margin: 0 !important;
+  padding: 0 !important;
+  padding-left: 1rem;
+}
+
+.table-of-contents li {
+  margin: 0 !important;
+  padding: 0 !important;
+  margin-bottom: 0 !important;
+  list-style: none;
+}
+
+.table-of-contents a {
+  font-size: 0.9rem;
+  line-height: 1.2;
+  display: block;
+  padding: 0.1rem 0 !important;
+}
+
+.table-of-contents > ul > li > ul {
+  margin: 0 !important;
+  margin-top: -0.4rem !important;
+}
+
+.table-of-contents ul ul li {
+  margin: 0 !important;
+  margin-bottom: 0 !important;
+}
+
+.table-of-contents ul ul a {
+  padding: 0.05rem 0 !important;
+}
 
 .sidebar-nav {
   background: var(--color-bg);

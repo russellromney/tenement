@@ -1,0 +1,20 @@
+<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+  <!-- Simple building icon for favicon -->
+
+  <!-- Building -->
+  <rect x="20" y="40" width="60" height="50" rx="2" fill="#0d9488" stroke="#0d9488" stroke-width="1"/>
+
+  <!-- Roof -->
+  <polygon points="20,40 50,20 80,40" fill="#0d9488"/>
+
+  <!-- Windows 2x2 (simplified for small favicon) -->
+  <rect x="28" y="48" width="8" height="8" fill="#ffffff" opacity="0.7"/>
+  <rect x="42" y="48" width="8" height="8" fill="#ffffff" opacity="0.7"/>
+  <rect x="56" y="48" width="8" height="8" fill="#ffffff" opacity="0.7"/>
+  <rect x="28" y="62" width="8" height="8" fill="#ffffff" opacity="0.7"/>
+  <rect x="42" y="62" width="8" height="8" fill="#ffffff" opacity="0.7"/>
+  <rect x="56" y="62" width="8" height="8" fill="#ffffff" opacity="0.7"/>
+
+  <!-- Door -->
+  <rect x="46" y="75" width="8" height="12" fill="#ffffff" opacity="0.5"/>
+</svg>

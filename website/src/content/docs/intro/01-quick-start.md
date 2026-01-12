@@ -6,13 +6,14 @@ description: Get tenement running in 5 minutes
 ## Install
 
 ```bash
-curl -LsSf https://tenement.dev/install.sh | sh
+cargo install tenement-cli
 ```
 
-Or with Cargo:
+This installs the `ten` command. Verify:
 
 ```bash
-cargo install tenement-cli
+$ ten --version
+ten 0.1.0
 ```
 
 ## 1. Create a Config
@@ -38,7 +39,7 @@ LOG_LEVEL = "info"
 ## 2. Spawn an Instance
 
 ```bash
-$ tenement spawn api --id user123
+$ ten spawn api --id user123
 Spawned api:user123
 Socket: /tmp/api-user123.sock
 ```
@@ -48,7 +49,7 @@ Your process is running and listening on `/tmp/api-user123.sock`.
 ## 3. List Instances
 
 ```bash
-$ tenement ps
+$ ten ps
 INSTANCE             SOCKET                      UPTIME     HEALTH
 api:user123          /tmp/api-user123.sock       2m         healthy
 ```
@@ -71,7 +72,7 @@ server {
 ## 5. Stop When Done
 
 ```bash
-$ tenement stop api:user123
+$ ten stop api:user123
 Stopped api:user123
 ```
 
@@ -81,4 +82,4 @@ Or it stops automatically after `idle_timeout` (5 minutes in this example).
 
 - [Getting Started Guide](/guides/getting-started) - Detailed setup
 - [Configuration Reference](/guides/configuration) - All options
-- [Use Cases](/use-cases/multitenant) - Real-world examples
+- [Use Cases](/use-cases/01-multitenant) - Real-world examples

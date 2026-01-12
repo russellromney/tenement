@@ -1,82 +1,46 @@
 ---
 title: tenement
 description: Hyperlightweight process hypervisor for single-server deployments
-template: splash
-hero:
-  tagline: Cramped housing for your processes
-  image:
-    file: ../../assets/hero.svg
-  actions:
-    - text: Get Started
-      link: /intro/quick-start/
-      icon: right-arrow
-      variant: primary
-    - text: Learn More
-      link: /intro/why/
-      icon: external
 ---
 
-## Why tenement?
+**Lightweight process hypervisor in Rust.**
 
-Pack **1000 rarely-active services on a single $5 server**.
+Pack **100 services on a single $5 server**, with 20% typically active.
 
-- **Scale to zero** - Services sleep when idle, wake on request
-- **Isolated processes** - Namespace separation, zero overhead
-- **Simple config** - One TOML file defines everything
-- **No orchestrator** - Just fast process supervision
+## What You Get
 
-## The Economics
-
-```
-1000 customers
-├── 2% active = 20 running
-├── 20 × 20MB = 400MB RAM
-└── Cost: $5/month
-    Charge: $5-10/month
-    Margin: 500-1000x
-```
-
-Build single-tenant code. Deploy multi-tenant. Profit.
-
-## Quick Start
-
-```bash
-# Install
-cargo install tenement-cli
-
-# Configure
-cat > tenement.toml << EOF
-[service.api]
-command = "./api"
-socket = "/tmp/api-{id}.sock"
-health = "/health"
-idle_timeout = 300
-EOF
-
-# Spawn
-tenement spawn api --id user123
-```
-
-Now `user123.api.example.com` routes to their isolated instance.
-
-## Features
-
-- **Sub-second cold starts** - Unix sockets, no network overhead
-- **On-demand spawn** - Processes start when first requested
+- **Single binary** (~10MB Rust)
+- **Built-in routing** - `user.api.example.com` → `api:user` automatically
+- **Process isolation** - Namespace separation (zero overhead) or gVisor sandbox (untrusted code)
 - **Auto-restart** - Health checks with exponential backoff
-- **Resource limits** - Memory and CPU constraints via cgroups v2
-- **Isolation levels** - Namespace, sandbox (gVisor), or bare process
-- **Web dashboard** - Monitor and manage instances
-- **Prometheus metrics** - Full observability
-- **Log capture** - Full-text search with streaming
+- **Scale-to-zero** - Stop idle instances, auto-start on request
+- **One TOML config** - All services defined in one file
 
-## What's Next?
+## Perfect For
 
-Choose your path:
+- 10-1000 customer instances on one $5 server
+- Multi-tenant SaaS (each tenant = isolated process)
+- Microservices without Kubernetes overhead
+- Avoiding Docker complexity for small deployments
 
-- **Just want to run it?** → [Quick Start](/intro/quick-start)
-- **Want to understand it?** → [Why tenement?](/intro/why)
-- **Care about the money?** → [The Economics](/intro/economics)
-- **Building a SaaS?** → [Multi-tenant Guide](/use-cases/multitenant)
-- **Running microservices?** → [Microservices on VPS](/use-cases/microservices)
-- **Need details?** → [CLI Reference](/reference/cli)
+## vs Alternatives
+
+| Tool | Why not |
+|------|---------|
+| Docker | Heavy, slow startup, network overhead |
+| systemd | No routing, no idle timeout |
+| K8s | Massive overhead for single server |
+| Fly Machines | Per-machine pricing kills margin at scale |
+
+## Get Started
+
+- [Quick Start](/intro/01-quick-start) - Installation & first spawn
+- [The Economics](/intro/02-economics) - Detailed cost breakdown
+
+## Explore
+
+- [Multi-tenant SaaS](/use-cases/01-multitenant) - Primary use case
+- [Scale-to-Zero Services](/use-cases/02-scale-to-zero) - Idle timeout & wake-on-request
+- [Isolation Levels](/guides/01-isolation) - Namespace vs sandbox
+- [Fleet Mode](/guides/02-fleet) - Multi-server orchestration
+- [Roadmap](/reference/roadmap) - What's coming

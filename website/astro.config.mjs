@@ -8,10 +8,16 @@ export default defineConfig({
     starlight({
       title: 'tenement',
       description: 'Hyperlightweight process hypervisor for single-server deployments',
+      logo: {
+        src: './src/assets/logo.svg',
+        alt: 'tenement',
+      },
+      favicon: '/favicon.svg',
       social: {
         github: 'https://github.com/russellromney/tenement',
       },
       sidebar: [
+        { label: 'Home', link: '/' },
         { label: 'Start Here', autogenerate: { directory: 'intro' } },
         { label: 'Guides', autogenerate: { directory: 'guides' } },
         { label: 'Use Cases', autogenerate: { directory: 'use-cases' } },
