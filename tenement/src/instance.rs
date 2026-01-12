@@ -136,7 +136,13 @@ impl Instance {
     }
 
     /// Check if this instance has been idle longer than its timeout.
-    /// Returns false if no idle_timeout is configured.
+    ///
+    /// Returns false if:
+    /// - No idle_timeout is configured (None)
+    /// - idle_timeout is set to 0 (explicit "never stop")
+    ///
+    /// Only returns true when idle_timeout > 0 AND the instance has been
+    /// idle for longer than that duration.
     pub fn is_idle(&self) -> bool {
         match self.idle_timeout {
             Some(timeout) if timeout > 0 => {

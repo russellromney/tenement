@@ -483,8 +483,8 @@ async fn serve_asset(path: &str) -> impl IntoResponse {
 ```
 
 **Tasks:**
-- [ ] Add Cache-Control header
-- [ ] Consider ETag support
+- [x] Add Cache-Control header (24h for static assets, must-revalidate for HTML)
+- [ ] Consider ETag support (deferred - rust-embed doesn't provide easy content hashing)
 
 ---
 
@@ -566,7 +566,7 @@ pub fn is_idle(&self) -> bool {
 ```
 
 **Tasks:**
-- [ ] Add documentation for edge cases
+- [x] Add documentation for edge cases
 
 ---
 

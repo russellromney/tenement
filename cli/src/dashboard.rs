@@ -24,9 +24,18 @@ pub async fn serve_asset(path: &str) -> Response {
     match Assets::get(path) {
         Some(content) => {
             let mime = mime_guess::from_path(path).first_or_octet_stream();
+            // Use long cache for hashed assets (JS, CSS), short for HTML
+            let cache_control = if path.ends_with(".html") || path == "index.html" {
+                "public, max-age=0, must-revalidate"
+            } else {
+                "public, max-age=86400" // 24 hours for static assets
+            };
             (
                 StatusCode::OK,
-                [(header::CONTENT_TYPE, mime.as_ref())],
+                [
+                    (header::CONTENT_TYPE, mime.as_ref()),
+                    (header::CACHE_CONTROL, cache_control),
+                ],
                 Body::from(content.data.into_owned()),
             )
                 .into_response()
@@ -36,7 +45,10 @@ pub async fn serve_asset(path: &str) -> Response {
             match Assets::get("index.html") {
                 Some(content) => (
                     StatusCode::OK,
-                    [(header::CONTENT_TYPE, "text/html")],
+                    [
+                        (header::CONTENT_TYPE, "text/html"),
+                        (header::CACHE_CONTROL, "public, max-age=0, must-revalidate"),
+                    ],
                     Body::from(content.data.into_owned()),
                 )
                     .into_response(),
