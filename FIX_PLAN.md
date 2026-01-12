@@ -282,8 +282,8 @@ pub fn setup(name: &str, limits: &ResourceLimits) -> Result<Option<PathBuf>> {
 ```
 
 **Tasks:**
-- [ ] Fix check order in cgroup::setup()
-- [ ] Add test for warning when unavailable
+- [x] Fix check order in cgroup::create_cgroup()
+- [x] Existing tests cover behavior (warning only logged when limits exist)
 
 ---
 
@@ -539,7 +539,7 @@ if let Some(cpu_weight) = limits.cpu_shares {
 ```
 
 **Tasks:**
-- [ ] Add logging when value is clamped
+- [x] Add logging when value is clamped
 
 ---
 

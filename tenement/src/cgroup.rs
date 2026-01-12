@@ -76,15 +76,19 @@ impl CgroupManager {
     /// Create a cgroup for an instance and apply resource limits
     #[cfg(target_os = "linux")]
     pub fn create_cgroup(&self, instance_id: &str, limits: &ResourceLimits) -> Result<()> {
-        if !limits.has_limits() {
+        // Check availability first
+        if !self.is_available() {
+            if limits.has_limits() {
+                tracing::warn!(
+                    "cgroups v2 not available, resource limits will not be enforced for {}",
+                    instance_id
+                );
+            }
             return Ok(());
         }
 
-        if !self.is_available() {
-            tracing::warn!(
-                "cgroups v2 not available, resource limits will not be enforced for {}",
-                instance_id
-            );
+        // Then check if limits are needed
+        if !limits.has_limits() {
             return Ok(());
         }
 
@@ -127,6 +131,14 @@ impl CgroupManager {
         if let Some(cpu_weight) = limits.cpu_shares {
             // Clamp to valid range (1-10000)
             let weight = cpu_weight.clamp(1, 10000);
+            if weight != cpu_weight {
+                tracing::info!(
+                    "CPU weight {} clamped to {} for '{}'",
+                    cpu_weight,
+                    weight,
+                    instance_id
+                );
+            }
             let cpu_weight_path = cgroup_path.join("cpu.weight");
             std::fs::write(&cpu_weight_path, weight.to_string()).with_context(|| {
                 format!(
