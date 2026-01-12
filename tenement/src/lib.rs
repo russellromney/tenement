@@ -11,6 +11,7 @@ pub mod instance;
 pub mod logs;
 pub mod metrics;
 pub mod runtime;
+pub mod storage;
 pub mod store;
 
 pub use auth::{generate_token, hash_token, verify_token, TokenStore};
@@ -23,4 +24,5 @@ pub use metrics::Metrics;
 pub use runtime::{ProcessRuntime, Runtime, RuntimeHandle, RuntimeType, SpawnConfig, VmConfig};
 #[cfg(feature = "sandbox")]
 pub use runtime::SandboxRuntime;
+pub use storage::{calculate_dir_size, format_bytes, StorageInfo};
 pub use store::{init_db, ConfigStore, DbPool, LogStore};

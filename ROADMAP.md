@@ -337,6 +337,55 @@ Bug fixes and improved observability from FIX_PLAN.md.
 - P2-9: TokenStore lifetime (intentional borrow semantics)
 - P2-10: Slum route JOIN (N+1 fine for SQLite local queries)
 
+### Phase 8.8: Storage Quotas with Monitoring - DONE
+
+Per-instance disk storage limits with full observability.
+
+**Design: Directory Size Monitoring (Soft Limits)**
+- Chose directory size monitoring over Linux project quotas for portability
+- Soft limits: exceeding quota triggers warnings/metrics, process continues running
+- Periodic storage checks during health check cycle
+
+**Completed:**
+- [x] Config fields (`storage_quota_mb`, `storage_persist`) in `tenement/src/config.rs`
+- [x] Storage module (`calculate_dir_size`, `StorageInfo`, `format_bytes`) in `tenement/src/storage.rs`
+- [x] Instance fields (`storage_used_bytes`, `storage_quota_bytes`, `data_dir`) in `tenement/src/instance.rs`
+- [x] Hypervisor updates (data dir cleanup on stop, `get_storage_info`) in `tenement/src/hypervisor.rs`
+- [x] Storage metrics (`LabeledGauge`, 3 new Prometheus metrics) in `tenement/src/metrics.rs`
+- [x] Storage API endpoint (`GET /api/instances/:id/storage`) in `cli/src/server.rs`
+- [x] Dashboard UI (storage column with color coding) in `dashboard/src/App.svelte`
+- [x] Module export in `tenement/src/lib.rs`
+- [x] 30 storage-related tests passing
+
+**Config:**
+```toml
+[service.api]
+command = "./api"
+storage_quota_mb = 256    # Storage limit in MB (None = unlimited)
+storage_persist = true    # Keep data on stop (default: false)
+```
+
+**Metrics:**
+```
+instance_storage_bytes{process="api",instance="prod"} 134217728
+instance_storage_quota_bytes{process="api",instance="prod"} 536870912
+instance_storage_usage_ratio{process="api",instance="prod"} 0.25
+```
+
+**API Endpoint:** `GET /api/instances/:id/storage`
+```json
+{
+  "used_bytes": 134217728,
+  "quota_bytes": 536870912,
+  "usage_percent": 25.0,
+  "path": "/data/api/prod"
+}
+```
+
+**Dashboard:**
+- Storage column with color coding (<70% green, 70-90% yellow, >90% red)
+- Display: "134MB / 512MB" (or "134MB" if no quota)
+
 ### Phase 9: Slum - Multi-Provider Orchestration (v0.9)
 
 Fleet orchestration across multiple tenements on different providers.

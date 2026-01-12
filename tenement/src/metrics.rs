@@ -176,6 +176,54 @@ impl LabeledCounter {
     }
 }
 
+/// A labeled gauge (gauge per label combination)
+#[derive(Debug, Default)]
+pub struct LabeledGauge {
+    gauges: RwLock<HashMap<String, Arc<Gauge>>>,
+}
+
+impl LabeledGauge {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Get or create a gauge for the given labels
+    pub async fn with_labels(&self, labels: &Labels) -> Arc<Gauge> {
+        let key = labels_to_key(labels);
+
+        // Try read lock first
+        {
+            let gauges = self.gauges.read().await;
+            if let Some(gauge) = gauges.get(&key) {
+                return gauge.clone();
+            }
+        }
+
+        // Need to create
+        let mut gauges = self.gauges.write().await;
+        gauges
+            .entry(key)
+            .or_insert_with(|| Arc::new(Gauge::new()))
+            .clone()
+    }
+
+    /// Remove a gauge for the given labels (e.g., when instance stops)
+    pub async fn remove(&self, labels: &Labels) {
+        let key = labels_to_key(labels);
+        let mut gauges = self.gauges.write().await;
+        gauges.remove(&key);
+    }
+
+    /// Get all gauges with their label keys
+    pub async fn all(&self) -> Vec<(String, u64)> {
+        let gauges = self.gauges.read().await;
+        gauges
+            .iter()
+            .map(|(k, v)| (k.clone(), v.get()))
+            .collect()
+    }
+}
+
 /// A labeled histogram
 #[derive(Debug, Default)]
 pub struct LabeledHistogram {
@@ -249,6 +297,13 @@ pub struct Metrics {
     pub instances_up: Gauge,
     /// Total instance restarts
     pub instance_restarts: LabeledCounter,
+    /// Current storage usage in bytes per instance
+    pub instance_storage_bytes: LabeledGauge,
+    /// Configured storage quota in bytes per instance (0 = unlimited)
+    pub instance_storage_quota_bytes: LabeledGauge,
+    /// Storage usage ratio (0-10000, divide by 10000 to get 0.0-1.0)
+    /// E.g., 2500 = 0.25 = 25% usage
+    pub instance_storage_usage_ratio: LabeledGauge,
 }
 
 impl Metrics {
@@ -258,6 +313,9 @@ impl Metrics {
             request_duration_ms: LabeledHistogram::new(),
             instances_up: Gauge::new(),
             instance_restarts: LabeledCounter::new(),
+            instance_storage_bytes: LabeledGauge::new(),
+            instance_storage_quota_bytes: LabeledGauge::new(),
+            instance_storage_usage_ratio: LabeledGauge::new(),
         })
     }
 
@@ -331,6 +389,50 @@ impl Metrics {
             }
         }
 
+        // tenement_instance_storage_bytes
+        output.push_str("\n# HELP tenement_instance_storage_bytes Current storage usage in bytes\n");
+        output.push_str("# TYPE tenement_instance_storage_bytes gauge\n");
+        for (labels, value) in self.instance_storage_bytes.all().await {
+            if labels.is_empty() {
+                output.push_str(&format!("tenement_instance_storage_bytes {}\n", value));
+            } else {
+                output.push_str(&format!(
+                    "tenement_instance_storage_bytes{{{}}} {}\n",
+                    labels, value
+                ));
+            }
+        }
+
+        // tenement_instance_storage_quota_bytes
+        output.push_str("\n# HELP tenement_instance_storage_quota_bytes Configured storage quota in bytes (0 = unlimited)\n");
+        output.push_str("# TYPE tenement_instance_storage_quota_bytes gauge\n");
+        for (labels, value) in self.instance_storage_quota_bytes.all().await {
+            if labels.is_empty() {
+                output.push_str(&format!("tenement_instance_storage_quota_bytes {}\n", value));
+            } else {
+                output.push_str(&format!(
+                    "tenement_instance_storage_quota_bytes{{{}}} {}\n",
+                    labels, value
+                ));
+            }
+        }
+
+        // tenement_instance_storage_usage_ratio
+        output.push_str("\n# HELP tenement_instance_storage_usage_ratio Storage usage ratio (0.0 to 1.0+)\n");
+        output.push_str("# TYPE tenement_instance_storage_usage_ratio gauge\n");
+        for (labels, value) in self.instance_storage_usage_ratio.all().await {
+            // Value is stored as ratio * 10000, convert back to decimal
+            let ratio = value as f64 / 10000.0;
+            if labels.is_empty() {
+                output.push_str(&format!("tenement_instance_storage_usage_ratio {:.4}\n", ratio));
+            } else {
+                output.push_str(&format!(
+                    "tenement_instance_storage_usage_ratio{{{}}} {:.4}\n",
+                    labels, ratio
+                ));
+            }
+        }
+
         output
     }
 }
@@ -342,6 +444,9 @@ impl Default for Metrics {
             request_duration_ms: LabeledHistogram::new(),
             instances_up: Gauge::new(),
             instance_restarts: LabeledCounter::new(),
+            instance_storage_bytes: LabeledGauge::new(),
+            instance_storage_quota_bytes: LabeledGauge::new(),
+            instance_storage_usage_ratio: LabeledGauge::new(),
         }
     }
 }

@@ -42,6 +42,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/health", get(health))
         .route("/metrics", get(metrics_endpoint))
         .route("/api/instances", get(list_instances))
+        .route("/api/instances/{id}/storage", get(get_instance_storage))
         .route("/api/logs", get(query_logs))
         .route("/api/logs/stream", get(stream_logs))
         // Dashboard static assets
@@ -175,6 +176,8 @@ async fn list_instances(State(state): State<AppState>) -> impl IntoResponse {
             uptime_secs: i.uptime_secs,
             restarts: i.restarts,
             health: i.health.to_string(),
+            storage_used_bytes: i.storage_used_bytes,
+            storage_quota_bytes: i.storage_quota_bytes,
         })
         .collect();
     Json(response)
@@ -187,6 +190,42 @@ struct InstanceInfo {
     uptime_secs: u64,
     restarts: u32,
     health: String,
+    storage_used_bytes: u64,
+    storage_quota_bytes: Option<u64>,
+}
+
+/// Get storage info for a specific instance
+/// Instance ID format: process:instance (e.g., "api:prod")
+async fn get_instance_storage(
+    State(state): State<AppState>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> Result<Json<StorageInfoResponse>, StatusCode> {
+    // Parse instance ID as "process:instance"
+    let parts: Vec<&str> = id.splitn(2, ':').collect();
+    if parts.len() != 2 {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    let process = parts[0];
+    let instance_id = parts[1];
+
+    // Get storage info from hypervisor
+    match state.hypervisor.get_storage_info(process, instance_id).await {
+        Some(info) => Ok(Json(StorageInfoResponse {
+            used_bytes: info.used_bytes,
+            quota_bytes: info.quota_bytes,
+            usage_percent: info.usage_percent(),
+            path: info.path.display().to_string(),
+        })),
+        None => Err(StatusCode::NOT_FOUND),
+    }
+}
+
+#[derive(Serialize)]
+struct StorageInfoResponse {
+    used_bytes: u64,
+    quota_bytes: Option<u64>,
+    usage_percent: Option<f64>,
+    path: String,
 }
 
 /// Query parameters for log endpoint

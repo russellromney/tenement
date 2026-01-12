@@ -98,6 +98,35 @@
     }
   }
 
+  // Format bytes to human-readable (e.g., "134MB")
+  function formatBytes(bytes) {
+    const KB = 1024;
+    const MB = KB * 1024;
+    const GB = MB * 1024;
+    if (bytes >= GB) return `${(bytes / GB).toFixed(1)}GB`;
+    if (bytes >= MB) return `${Math.floor(bytes / MB)}MB`;
+    if (bytes >= KB) return `${Math.floor(bytes / KB)}KB`;
+    return `${bytes}B`;
+  }
+
+  // Format storage display (e.g., "134MB / 512MB" or "134MB" if no quota)
+  function formatStorage(inst) {
+    const used = formatBytes(inst.storage_used_bytes || 0);
+    if (inst.storage_quota_bytes) {
+      return `${used} / ${formatBytes(inst.storage_quota_bytes)}`;
+    }
+    return used;
+  }
+
+  // Storage usage color based on percentage
+  function storageColor(inst) {
+    if (!inst.storage_quota_bytes) return 'text-gray-500';
+    const ratio = (inst.storage_used_bytes || 0) / inst.storage_quota_bytes;
+    if (ratio > 0.9) return 'text-red-600';
+    if (ratio > 0.7) return 'text-yellow-600';
+    return 'text-green-600';
+  }
+
   // Handle tab change
   function selectTab(tab) {
     activeTab = tab;
@@ -182,6 +211,7 @@
                 <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Socket</th>
                 <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Uptime</th>
                 <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Restarts</th>
+                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Storage</th>
                 <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Health</th>
               </tr>
             </thead>
@@ -192,6 +222,7 @@
                   <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 font-mono">{inst.socket}</td>
                   <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{formatUptime(inst.uptime_secs)}</td>
                   <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{inst.restarts}</td>
+                  <td class="px-6 py-4 whitespace-nowrap text-sm {storageColor(inst)}">{formatStorage(inst)}</td>
                   <td class="px-6 py-4 whitespace-nowrap text-sm {healthColor(inst.health)}">{inst.health}</td>
                 </tr>
               {/each}

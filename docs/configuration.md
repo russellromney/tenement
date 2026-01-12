@@ -31,6 +31,8 @@ startup_timeout = 10         # Seconds to wait for socket
 idle_timeout = 300           # Auto-stop after idle (0 = never)
 memory_limit_mb = 256        # Memory limit (cgroups v2)
 cpu_shares = 100             # CPU weight 1-10000 (cgroups v2)
+storage_quota_mb = 512       # Storage limit in MB (soft limit)
+storage_persist = true       # Keep data on stop
 
 [service.api.env]
 DATABASE_PATH = "{data_dir}/{id}/app.db"
@@ -101,6 +103,8 @@ Define service templates under `[service.<name>]` (or `[process.<name>]` for leg
 | `idle_timeout` | u64 | No | - | Auto-stop after N seconds idle (0 = never) |
 | `memory_limit_mb` | u32 | No | - | Memory limit in MB (cgroups v2) |
 | `cpu_shares` | u32 | No | - | CPU weight 1-10000 (cgroups v2, default 100) |
+| `storage_quota_mb` | u32 | No | - | Storage limit in MB (soft limit with monitoring) |
+| `storage_persist` | bool | No | `false` | Keep data directory on instance stop |
 
 ### Command
 
@@ -209,6 +213,32 @@ Resource limits work with all isolation levels (process, namespace, sandbox).
 - Requires Linux with cgroups v2 enabled (kernel 4.5+)
 - On non-Linux, resource limits are silently ignored
 - Cgroup created at `/sys/fs/cgroup/tenement/{instance_id}/`
+
+### Storage Quotas
+
+Monitor and limit per-instance disk usage.
+
+```toml
+[service.api]
+command = "./api"
+storage_quota_mb = 256    # Storage limit in MB (soft limit)
+storage_persist = true    # Keep data on stop (default: false)
+```
+
+| Field | Range | Description |
+|-------|-------|-------------|
+| `storage_quota_mb` | 1+ | Soft storage limit. Exceeding triggers warnings/metrics. |
+| `storage_persist` | bool | If true, data directory preserved after instance stops. |
+
+**Monitoring:**
+- Prometheus metrics: `instance_storage_bytes`, `instance_storage_quota_bytes`, `instance_storage_usage_ratio`
+- API endpoint: `GET /api/instances/:id/storage`
+- Dashboard: Color-coded storage column (<70% green, 70-90% yellow, >90% red)
+
+**Notes:**
+- Uses directory size monitoring (works on all platforms)
+- Soft limits: process continues running if quota exceeded
+- Storage checked during health check cycle
 
 ### Environment Variables
 

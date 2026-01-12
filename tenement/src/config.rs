@@ -166,6 +166,19 @@ pub struct ProcessConfig {
     #[serde(default)]
     pub cpu_shares: Option<u32>,
 
+    // --- Storage limits ---
+
+    /// Storage quota in MB (None = unlimited)
+    /// Soft limit: exceeding quota triggers warnings and metrics but doesn't kill the process.
+    #[serde(default)]
+    pub storage_quota_mb: Option<u32>,
+
+    /// Keep data directory on stop (default: false)
+    /// If false, the instance's data directory is deleted when stopped.
+    /// If true, data is preserved for the next spawn.
+    #[serde(default)]
+    pub storage_persist: bool,
+
     // --- Firecracker/QEMU-specific fields ---
 
     /// Path to kernel image (required for firecracker runtime)
@@ -1011,5 +1024,94 @@ command = "./api"
         // Both should default to None (unlimited)
         assert_eq!(api.memory_limit_mb, None);
         assert_eq!(api.cpu_shares, None);
+    }
+
+    // ===================
+    // STORAGE QUOTA TESTS
+    // ===================
+
+    #[test]
+    fn test_storage_quota_config() {
+        let config_str = r#"
+[service.api]
+command = "./api"
+storage_quota_mb = 512
+"#;
+        let config = Config::from_str(config_str).unwrap();
+        let api = config.get_service("api").unwrap();
+
+        assert_eq!(api.storage_quota_mb, Some(512));
+        assert!(!api.storage_persist); // Default false
+    }
+
+    #[test]
+    fn test_storage_persist_config() {
+        let config_str = r#"
+[service.api]
+command = "./api"
+storage_persist = true
+"#;
+        let config = Config::from_str(config_str).unwrap();
+        let api = config.get_service("api").unwrap();
+
+        assert!(api.storage_persist);
+        assert_eq!(api.storage_quota_mb, None); // Default None
+    }
+
+    #[test]
+    fn test_storage_quota_and_persist() {
+        let config_str = r#"
+[service.api]
+command = "./api"
+storage_quota_mb = 256
+storage_persist = true
+"#;
+        let config = Config::from_str(config_str).unwrap();
+        let api = config.get_service("api").unwrap();
+
+        assert_eq!(api.storage_quota_mb, Some(256));
+        assert!(api.storage_persist);
+    }
+
+    #[test]
+    fn test_storage_defaults() {
+        let config_str = r#"
+[service.api]
+command = "./api"
+"#;
+        let config = Config::from_str(config_str).unwrap();
+        let api = config.get_service("api").unwrap();
+
+        // Both should have defaults
+        assert_eq!(api.storage_quota_mb, None);
+        assert!(!api.storage_persist);
+    }
+
+    #[test]
+    fn test_storage_quota_zero() {
+        // storage_quota_mb of 0 is valid (means no storage allowed)
+        let config_str = r#"
+[service.api]
+command = "./api"
+storage_quota_mb = 0
+"#;
+        let config = Config::from_str(config_str).unwrap();
+        let api = config.get_service("api").unwrap();
+
+        assert_eq!(api.storage_quota_mb, Some(0));
+    }
+
+    #[test]
+    fn test_storage_quota_large_value() {
+        let config_str = r#"
+[service.api]
+command = "./api"
+storage_quota_mb = 102400
+"#;
+        let config = Config::from_str(config_str).unwrap();
+        let api = config.get_service("api").unwrap();
+
+        // 100GB quota
+        assert_eq!(api.storage_quota_mb, Some(102400));
     }
 }

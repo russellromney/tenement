@@ -100,6 +100,14 @@ pub struct Instance {
     pub last_activity: Instant,
     /// Idle timeout in seconds (None = never auto-stop)
     pub idle_timeout: Option<u64>,
+    /// Storage quota in MB (None = unlimited)
+    pub storage_quota_mb: Option<u32>,
+    /// Keep data directory on stop
+    pub storage_persist: bool,
+    /// Cached storage usage in bytes (updated during health checks)
+    pub storage_used_bytes: u64,
+    /// Path to the instance's data directory
+    pub data_dir: PathBuf,
 }
 
 /// Instance info for display (serializable)
@@ -116,6 +124,12 @@ pub struct InstanceInfo {
     pub idle_secs: u64,
     /// Configured idle timeout (None = never auto-stop)
     pub idle_timeout: Option<u64>,
+    /// Current storage usage in bytes
+    pub storage_used_bytes: u64,
+    /// Configured storage quota in bytes (None = unlimited)
+    pub storage_quota_bytes: Option<u64>,
+    /// Path to instance data directory
+    pub data_dir: PathBuf,
 }
 
 use std::time::Duration;
@@ -132,6 +146,9 @@ impl Instance {
             status: InstanceStatus::Running,
             idle_secs: self.last_activity.elapsed().as_secs(),
             idle_timeout: self.idle_timeout,
+            storage_used_bytes: self.storage_used_bytes,
+            storage_quota_bytes: self.storage_quota_mb.map(|mb| (mb as u64) * 1024 * 1024),
+            data_dir: self.data_dir.clone(),
         }
     }
 
@@ -461,6 +478,9 @@ mod tests {
             status: InstanceStatus::Running,
             idle_secs: 60,
             idle_timeout: Some(300),
+            storage_used_bytes: 134217728,
+            storage_quota_bytes: Some(536870912),
+            data_dir: PathBuf::from("/data/api/user1"),
         };
 
         let json = serde_json::to_string(&info).unwrap();
@@ -469,11 +489,15 @@ mod tests {
         assert!(json.contains("3600"));
         assert!(json.contains("healthy"));
         assert!(json.contains("running"));
+        assert!(json.contains("134217728"));
+        assert!(json.contains("536870912"));
 
         let deserialized: InstanceInfo = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized.id.process, "api");
         assert_eq!(deserialized.uptime_secs, 3600);
         assert_eq!(deserialized.health, HealthStatus::Healthy);
+        assert_eq!(deserialized.storage_used_bytes, 134217728);
+        assert_eq!(deserialized.storage_quota_bytes, Some(536870912));
     }
 
     #[test]
@@ -488,6 +512,9 @@ mod tests {
             status: InstanceStatus::Starting,
             idle_secs: 0,
             idle_timeout: None,
+            storage_used_bytes: 0,
+            storage_quota_bytes: None,
+            data_dir: PathBuf::from("/data/api/user1"),
         };
 
         let json = serde_json::to_string(&info).unwrap();
@@ -495,6 +522,7 @@ mod tests {
 
         let deserialized: InstanceInfo = serde_json::from_str(&json).unwrap();
         assert!(deserialized.idle_timeout.is_none());
+        assert!(deserialized.storage_quota_bytes.is_none());
     }
 
     // ===================
@@ -672,6 +700,9 @@ mod tests {
             status: InstanceStatus::Running,
             idle_secs: 10,
             idle_timeout: Some(300),
+            storage_used_bytes: 1024,
+            storage_quota_bytes: Some(2048),
+            data_dir: PathBuf::from("/data/api/user1"),
         };
 
         let cloned = info.clone();
@@ -679,6 +710,8 @@ mod tests {
         assert_eq!(info.uptime_secs, cloned.uptime_secs);
         assert_eq!(info.restarts, cloned.restarts);
         assert_eq!(info.health, cloned.health);
+        assert_eq!(info.storage_used_bytes, cloned.storage_used_bytes);
+        assert_eq!(info.storage_quota_bytes, cloned.storage_quota_bytes);
     }
 
     #[test]
@@ -693,10 +726,59 @@ mod tests {
             status: InstanceStatus::Running,
             idle_secs: 0,
             idle_timeout: None,
+            storage_used_bytes: 0,
+            storage_quota_bytes: None,
+            data_dir: PathBuf::from("/data/api/user1"),
         };
 
         let debug = format!("{:?}", info);
         assert!(debug.contains("api"));
         assert!(debug.contains("user1"));
+    }
+
+    // ===================
+    // STORAGE FIELDS TESTS
+    // ===================
+
+    #[test]
+    fn test_instance_info_storage_no_quota() {
+        let info = InstanceInfo {
+            id: InstanceId::new("api", "user1"),
+            runtime: RuntimeType::Process,
+            socket: PathBuf::from("/tmp/test.sock"),
+            uptime_secs: 100,
+            restarts: 0,
+            health: HealthStatus::Healthy,
+            status: InstanceStatus::Running,
+            idle_secs: 0,
+            idle_timeout: None,
+            storage_used_bytes: 1024 * 1024 * 100, // 100MB
+            storage_quota_bytes: None, // No quota
+            data_dir: PathBuf::from("/data/api/user1"),
+        };
+
+        assert_eq!(info.storage_used_bytes, 104857600);
+        assert!(info.storage_quota_bytes.is_none());
+    }
+
+    #[test]
+    fn test_instance_info_storage_with_quota() {
+        let info = InstanceInfo {
+            id: InstanceId::new("api", "user1"),
+            runtime: RuntimeType::Process,
+            socket: PathBuf::from("/tmp/test.sock"),
+            uptime_secs: 100,
+            restarts: 0,
+            health: HealthStatus::Healthy,
+            status: InstanceStatus::Running,
+            idle_secs: 0,
+            idle_timeout: None,
+            storage_used_bytes: 134217728, // 128MB
+            storage_quota_bytes: Some(536870912), // 512MB
+            data_dir: PathBuf::from("/data/api/user1"),
+        };
+
+        assert_eq!(info.storage_used_bytes, 134217728);
+        assert_eq!(info.storage_quota_bytes, Some(536870912));
     }
 }

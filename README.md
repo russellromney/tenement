@@ -262,10 +262,14 @@ See [ROADMAP.md](ROADMAP.md) for the full isolation spectrum vision.
 - Race condition fix - Atomic get-and-touch for proxy requests
 - Improved logging - Cgroup cleanup, auth failures, CPU weight clamping
 - Dashboard caching - Cache-Control headers for static assets
+- Storage quotas per instance - Directory size monitoring with soft limits, 30 tests
+  - Config: `storage_quota_mb` and `storage_persist` per service
+  - Prometheus metrics: `instance_storage_bytes`, `instance_storage_quota_bytes`, `instance_storage_usage_ratio`
+  - API: `GET /api/instances/:id/storage`
+  - Dashboard: Storage column with color-coded usage
 
 **Next up:**
 - Cgroup lifecycle tests (Session 5) - Linux-only cgroup verification
-- Storage quotas per instance
 - WASM runtime (wasmtime) - Lightweight compute sandbox
 
 ## License

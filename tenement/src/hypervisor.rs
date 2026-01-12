@@ -6,6 +6,7 @@ use crate::instance::{HealthStatus, Instance, InstanceId, InstanceInfo};
 use crate::logs::LogBuffer;
 use crate::metrics::Metrics;
 use crate::runtime::{NamespaceRuntime, ProcessRuntime, Runtime, RuntimeHandle, RuntimeType, SpawnConfig};
+use crate::storage::{calculate_dir_size, StorageInfo};
 #[cfg(feature = "sandbox")]
 use crate::runtime::SandboxRuntime;
 use anyhow::{Context, Result};
@@ -275,6 +276,10 @@ impl Hypervisor {
             restart_times: Vec::new(),
             last_activity: now,
             idle_timeout: process_config.idle_timeout,
+            storage_quota_mb: process_config.storage_quota_mb,
+            storage_persist: process_config.storage_persist,
+            storage_used_bytes: 0,
+            data_dir: instance_data_dir.clone(),
         };
 
         {
@@ -321,6 +326,18 @@ impl Hypervisor {
             // Clean up socket
             if instance.socket.exists() {
                 std::fs::remove_file(&instance.socket).ok();
+            }
+
+            // Clean up data directory if storage_persist is false
+            if !instance.storage_persist && instance.data_dir.exists() {
+                if let Err(e) = std::fs::remove_dir_all(&instance.data_dir) {
+                    warn!(
+                        "Failed to remove data directory {:?} for {}: {}",
+                        instance.data_dir, instance_id, e
+                    );
+                } else {
+                    info!("Removed data directory {:?} for {}", instance.data_dir, instance_id);
+                }
             }
 
             // Update metrics
@@ -430,6 +447,25 @@ impl Hypervisor {
         let instance_id = InstanceId::new(process_name, id);
         let instances = self.instances.read().await;
         instances.get(&instance_id).map(|i| i.info())
+    }
+
+    /// Get storage information for a specific instance
+    pub async fn get_storage_info(&self, process_name: &str, id: &str) -> Option<StorageInfo> {
+        let instance_id = InstanceId::new(process_name, id);
+        let (data_dir, quota_mb) = {
+            let instances = self.instances.read().await;
+            instances.get(&instance_id).map(|i| {
+                (i.data_dir.clone(), i.storage_quota_mb)
+            })?
+        };
+
+        // Calculate current directory size
+        let used_bytes = calculate_dir_size(data_dir.clone()).await.unwrap_or(0);
+
+        // Convert quota from MB to bytes
+        let quota_bytes = quota_mb.map(|mb| (mb as u64) * 1024 * 1024);
+
+        Some(StorageInfo::new(used_bytes, quota_bytes, data_dir))
     }
 
     /// Get instance info and touch activity atomically.
@@ -744,6 +780,8 @@ mod tests {
             memory_mb: 256,
             vcpus: 1,
             vsock_port: 5000,
+            storage_quota_mb: None,
+            storage_persist: false,
         };
 
         config.service.insert(name.to_string(), process);
