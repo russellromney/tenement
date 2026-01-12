@@ -1,5 +1,9 @@
 # tenement
 
+| Note: this is still early alpha
+
+**Hyperlightweight process hypervisor for single-server deployments.**
+
 **Cramped housing for your processes.**
 
 Your apps don't need a penthouse - a roof, some supervision, and the occasional health check are probably fine. `tenement` packs processes into Unix sockets, watches them like a suspicious landlord, and restarts them when they misbehave.
