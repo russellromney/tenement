@@ -89,6 +89,11 @@ impl<'a> TokenStore<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashSet;
+
+    // ===================
+    // TOKEN GENERATION TESTS
+    // ===================
 
     #[test]
     fn test_generate_token() {
@@ -108,6 +113,67 @@ mod tests {
     }
 
     #[test]
+    fn test_generate_token_uniqueness() {
+        let mut tokens = HashSet::new();
+
+        // Generate 100 tokens, all should be unique
+        for _ in 0..100 {
+            let token = generate_token();
+            assert!(tokens.insert(token), "Token collision detected!");
+        }
+
+        assert_eq!(tokens.len(), 100);
+    }
+
+    #[test]
+    fn test_generate_token_url_safe() {
+        // Generate many tokens to ensure none have unsafe chars
+        for _ in 0..50 {
+            let token = generate_token();
+
+            // URL-safe base64 shouldn't contain these
+            assert!(!token.contains('+'), "Token contains +");
+            assert!(!token.contains('/'), "Token contains /");
+            assert!(!token.contains('='), "Token contains =");
+
+            // Should only contain URL-safe chars
+            assert!(
+                token.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'),
+                "Token contains non-URL-safe char: {}",
+                token
+            );
+        }
+    }
+
+    #[test]
+    fn test_generate_token_length() {
+        // 32 bytes in URL-safe base64 without padding = 43 chars
+        let token = generate_token();
+        assert_eq!(token.len(), 43);
+    }
+
+    #[test]
+    fn test_generate_token_entropy() {
+        // Tokens should have high entropy (no repeated patterns)
+        let tokens: Vec<String> = (0..10).map(|_| generate_token()).collect();
+
+        for i in 0..tokens.len() {
+            for j in (i + 1)..tokens.len() {
+                // First 10 characters should differ
+                assert_ne!(
+                    &tokens[i][..10],
+                    &tokens[j][..10],
+                    "Tokens share common prefix"
+                );
+            }
+        }
+    }
+
+    // ===================
+    // HASH TESTS
+    // ===================
+
+    #[test]
     fn test_hash_and_verify() {
         let token = generate_token();
         let hash = hash_token(&token).unwrap();
@@ -124,6 +190,30 @@ mod tests {
     }
 
     #[test]
+    fn test_hash_produces_different_hashes() {
+        // Argon2 uses random salt, so same input produces different hash
+        let token = "test_token";
+        let hash1 = hash_token(token).unwrap();
+        let hash2 = hash_token(token).unwrap();
+
+        // Hashes should be different (different salts)
+        assert_ne!(hash1, hash2);
+
+        // But both should verify
+        assert!(verify_token(token, &hash1));
+        assert!(verify_token(token, &hash2));
+    }
+
+    #[test]
+    fn test_hash_format_argon2() {
+        let token = generate_token();
+        let hash = hash_token(&token).unwrap();
+
+        // Should be Argon2 format
+        assert!(hash.starts_with("$argon2"));
+    }
+
+    #[test]
     fn test_verify_invalid_hash() {
         let token = generate_token();
 
@@ -131,6 +221,60 @@ mod tests {
         assert!(!verify_token(&token, "invalid_hash"));
         assert!(!verify_token(&token, ""));
     }
+
+    #[test]
+    fn test_verify_malformed_hashes() {
+        let token = generate_token();
+
+        let malformed = [
+            "$argon2",
+            "$argon2id$",
+            "$argon2id$v=19$",
+            "not_a_hash",
+            "   ",
+            "\n\n\n",
+        ];
+
+        for bad_hash in malformed {
+            assert!(!verify_token(&token, bad_hash), "Should reject: {}", bad_hash);
+        }
+    }
+
+    #[test]
+    fn test_hash_empty_string() {
+        // Should handle empty string
+        let hash = hash_token("").unwrap();
+        assert!(verify_token("", &hash));
+        assert!(!verify_token("not_empty", &hash));
+    }
+
+    #[test]
+    fn test_hash_long_token() {
+        let long_token = "x".repeat(1000);
+        let hash = hash_token(&long_token).unwrap();
+        assert!(verify_token(&long_token, &hash));
+    }
+
+    #[test]
+    fn test_hash_unicode() {
+        let unicode = "token_🔐_émojis_字符";
+        let hash = hash_token(unicode).unwrap();
+        assert!(verify_token(unicode, &hash));
+    }
+
+    #[test]
+    fn test_verify_case_sensitive() {
+        let token = "MyToken123";
+        let hash = hash_token(token).unwrap();
+
+        assert!(verify_token("MyToken123", &hash));
+        assert!(!verify_token("mytoken123", &hash));
+        assert!(!verify_token("MYTOKEN123", &hash));
+    }
+
+    // ===================
+    // TOKEN STORE TESTS
+    // ===================
 
     #[tokio::test]
     async fn test_token_store() {
@@ -160,5 +304,103 @@ mod tests {
         // Clear token
         store.clear().await.unwrap();
         assert!(!store.has_token().await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_token_store_set_token() {
+        use crate::store::{init_db, ConfigStore};
+        use tempfile::TempDir;
+
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("test.db");
+        let pool = init_db(&path).await.unwrap();
+        let config = ConfigStore::new(pool);
+        let store = TokenStore::new(&config);
+
+        // Set a specific token
+        let my_token = "my_custom_token_12345";
+        store.set_token(my_token).await.unwrap();
+
+        assert!(store.has_token().await.unwrap());
+        assert!(store.verify(my_token).await.unwrap());
+        assert!(!store.verify("wrong_token").await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_token_store_replace_token() {
+        use crate::store::{init_db, ConfigStore};
+        use tempfile::TempDir;
+
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("test.db");
+        let pool = init_db(&path).await.unwrap();
+        let config = ConfigStore::new(pool);
+        let store = TokenStore::new(&config);
+
+        // Set first token
+        let token1 = store.generate_and_store().await.unwrap();
+        assert!(store.verify(&token1).await.unwrap());
+
+        // Replace with new token
+        let token2 = store.generate_and_store().await.unwrap();
+
+        // Old token should no longer work
+        assert!(!store.verify(&token1).await.unwrap());
+
+        // New token should work
+        assert!(store.verify(&token2).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_token_store_verify_no_token() {
+        use crate::store::{init_db, ConfigStore};
+        use tempfile::TempDir;
+
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("test.db");
+        let pool = init_db(&path).await.unwrap();
+        let config = ConfigStore::new(pool);
+        let store = TokenStore::new(&config);
+
+        // No token set, verify should return false
+        assert!(!store.verify("any_token").await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_token_store_clear_idempotent() {
+        use crate::store::{init_db, ConfigStore};
+        use tempfile::TempDir;
+
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("test.db");
+        let pool = init_db(&path).await.unwrap();
+        let config = ConfigStore::new(pool);
+        let store = TokenStore::new(&config);
+
+        // Clear when no token exists should succeed
+        store.clear().await.unwrap();
+        assert!(!store.has_token().await.unwrap());
+
+        // Clear again should still succeed
+        store.clear().await.unwrap();
+        assert!(!store.has_token().await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_generate_and_store_returns_unique() {
+        use crate::store::{init_db, ConfigStore};
+        use tempfile::TempDir;
+
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("test.db");
+        let pool = init_db(&path).await.unwrap();
+        let config = ConfigStore::new(pool);
+        let store = TokenStore::new(&config);
+
+        let token1 = store.generate_and_store().await.unwrap();
+        let token2 = store.generate_and_store().await.unwrap();
+
+        // Each call should generate a unique token
+        assert_ne!(token1, token2);
     }
 }

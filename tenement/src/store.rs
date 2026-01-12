@@ -482,6 +482,10 @@ mod tests {
         (pool, dir)
     }
 
+    // ===================
+    // DATABASE INIT TESTS
+    // ===================
+
     #[tokio::test]
     async fn test_init_db() {
         let (pool, _dir) = create_test_db().await;
@@ -493,6 +497,57 @@ mod tests {
             .unwrap();
         assert!(result.is_some());
     }
+
+    #[tokio::test]
+    async fn test_init_db_creates_config_table() {
+        let (pool, _dir) = create_test_db().await;
+
+        let result = sqlx::query("SELECT name FROM sqlite_master WHERE type='table' AND name='config'")
+            .fetch_optional(&pool)
+            .await
+            .unwrap();
+        assert!(result.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_init_db_creates_fts_table() {
+        let (pool, _dir) = create_test_db().await;
+
+        let result = sqlx::query("SELECT name FROM sqlite_master WHERE type='table' AND name='logs_fts'")
+            .fetch_optional(&pool)
+            .await
+            .unwrap();
+        assert!(result.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_init_db_creates_indexes() {
+        let (pool, _dir) = create_test_db().await;
+
+        // Check for process index
+        let result = sqlx::query("SELECT name FROM sqlite_master WHERE type='index' AND name='idx_logs_process'")
+            .fetch_optional(&pool)
+            .await
+            .unwrap();
+        assert!(result.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_init_db_idempotent() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("test.db");
+
+        // Initialize twice - should not error
+        let pool1 = init_db(&path).await.unwrap();
+        drop(pool1);
+
+        let pool2 = init_db(&path).await.unwrap();
+        assert!(pool2.acquire().await.is_ok());
+    }
+
+    // ===================
+    // LOG STORE INSERT TESTS
+    // ===================
 
     #[tokio::test]
     async fn test_log_store_insert_and_query() {
@@ -514,6 +569,40 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_log_store_insert_multiple() {
+        let (pool, _dir) = create_test_db().await;
+        let store = LogStore::new(pool);
+
+        for i in 0..10 {
+            store.push(LogEntry::new("api", "prod", LogLevel::Stdout, format!("msg {}", i))).await;
+        }
+
+        tokio::time::sleep(Duration::from_millis(300)).await;
+
+        let count = store.count().await.unwrap();
+        assert_eq!(count, 10);
+    }
+
+    #[tokio::test]
+    async fn test_log_store_preserves_timestamp() {
+        let (pool, _dir) = create_test_db().await;
+        let store = LogStore::new(pool);
+
+        let entry = LogEntry::new("api", "prod", LogLevel::Stdout, "test".to_string());
+        let original_ts = entry.timestamp;
+        store.push(entry).await;
+
+        tokio::time::sleep(Duration::from_millis(300)).await;
+
+        let results = store.query(&LogQuery::default()).await.unwrap();
+        assert_eq!(results[0].timestamp, original_ts);
+    }
+
+    // ===================
+    // LOG STORE QUERY TESTS
+    // ===================
+
+    #[tokio::test]
     async fn test_log_store_query_filter_process() {
         let (pool, _dir) = create_test_db().await;
         let store = LogStore::new(pool);
@@ -531,6 +620,99 @@ mod tests {
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].process, "api");
     }
+
+    #[tokio::test]
+    async fn test_log_store_query_filter_instance() {
+        let (pool, _dir) = create_test_db().await;
+        let store = LogStore::new(pool);
+
+        store.push(LogEntry::new("api", "user1", LogLevel::Stdout, "user1 msg".to_string())).await;
+        store.push(LogEntry::new("api", "user2", LogLevel::Stdout, "user2 msg".to_string())).await;
+
+        tokio::time::sleep(Duration::from_millis(300)).await;
+
+        let query = LogQuery {
+            instance_id: Some("user1".to_string()),
+            ..Default::default()
+        };
+        let results = store.query(&query).await.unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].instance_id, "user1");
+    }
+
+    #[tokio::test]
+    async fn test_log_store_query_filter_level() {
+        let (pool, _dir) = create_test_db().await;
+        let store = LogStore::new(pool);
+
+        store.push(LogEntry::new("api", "prod", LogLevel::Stdout, "stdout".to_string())).await;
+        store.push(LogEntry::new("api", "prod", LogLevel::Stderr, "stderr".to_string())).await;
+
+        tokio::time::sleep(Duration::from_millis(300)).await;
+
+        let query = LogQuery {
+            level: Some(LogLevel::Stderr),
+            ..Default::default()
+        };
+        let results = store.query(&query).await.unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].level, LogLevel::Stderr);
+    }
+
+    #[tokio::test]
+    async fn test_log_store_query_combined_filters() {
+        let (pool, _dir) = create_test_db().await;
+        let store = LogStore::new(pool);
+
+        store.push(LogEntry::new("api", "prod", LogLevel::Stdout, "api prod stdout".to_string())).await;
+        store.push(LogEntry::new("api", "prod", LogLevel::Stderr, "api prod stderr".to_string())).await;
+        store.push(LogEntry::new("api", "staging", LogLevel::Stderr, "api staging stderr".to_string())).await;
+        store.push(LogEntry::new("web", "prod", LogLevel::Stderr, "web prod stderr".to_string())).await;
+
+        tokio::time::sleep(Duration::from_millis(300)).await;
+
+        let query = LogQuery {
+            process: Some("api".to_string()),
+            instance_id: Some("prod".to_string()),
+            level: Some(LogLevel::Stderr),
+            ..Default::default()
+        };
+        let results = store.query(&query).await.unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].message, "api prod stderr");
+    }
+
+    #[tokio::test]
+    async fn test_log_store_query_limit() {
+        let (pool, _dir) = create_test_db().await;
+        let store = LogStore::new(pool);
+
+        for i in 0..10 {
+            store.push(LogEntry::new("api", "prod", LogLevel::Stdout, format!("msg {}", i))).await;
+        }
+
+        tokio::time::sleep(Duration::from_millis(300)).await;
+
+        let query = LogQuery {
+            limit: Some(5),
+            ..Default::default()
+        };
+        let results = store.query(&query).await.unwrap();
+        assert_eq!(results.len(), 5);
+    }
+
+    #[tokio::test]
+    async fn test_log_store_query_empty() {
+        let (pool, _dir) = create_test_db().await;
+        let store = LogStore::new(pool);
+
+        let results = store.query(&LogQuery::default()).await.unwrap();
+        assert!(results.is_empty());
+    }
+
+    // ===================
+    // FTS SEARCH TESTS
+    // ===================
 
     #[tokio::test]
     async fn test_log_store_fts_search() {
@@ -552,6 +734,65 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_log_store_fts_no_match() {
+        let (pool, _dir) = create_test_db().await;
+        let store = LogStore::new(pool);
+
+        store.push(LogEntry::new("api", "prod", LogLevel::Stdout, "hello world".to_string())).await;
+
+        tokio::time::sleep(Duration::from_millis(300)).await;
+
+        let query = LogQuery {
+            search: Some("nonexistent".to_string()),
+            ..Default::default()
+        };
+        let results = store.query(&query).await.unwrap();
+        assert!(results.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_log_store_fts_with_filter() {
+        let (pool, _dir) = create_test_db().await;
+        let store = LogStore::new(pool);
+
+        store.push(LogEntry::new("api", "prod", LogLevel::Stdout, "hello from api".to_string())).await;
+        store.push(LogEntry::new("web", "prod", LogLevel::Stdout, "hello from web".to_string())).await;
+
+        tokio::time::sleep(Duration::from_millis(300)).await;
+
+        let query = LogQuery {
+            search: Some("hello".to_string()),
+            process: Some("api".to_string()),
+            ..Default::default()
+        };
+        let results = store.query(&query).await.unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].process, "api");
+    }
+
+    #[tokio::test]
+    async fn test_log_store_fts_special_chars() {
+        let (pool, _dir) = create_test_db().await;
+        let store = LogStore::new(pool);
+
+        store.push(LogEntry::new("api", "prod", LogLevel::Stdout, "error: file not found".to_string())).await;
+        store.push(LogEntry::new("api", "prod", LogLevel::Stdout, "error [500]: internal".to_string())).await;
+
+        tokio::time::sleep(Duration::from_millis(300)).await;
+
+        let query = LogQuery {
+            search: Some("error".to_string()),
+            ..Default::default()
+        };
+        let results = store.query(&query).await.unwrap();
+        assert_eq!(results.len(), 2);
+    }
+
+    // ===================
+    // LOG ROTATION TESTS
+    // ===================
+
+    #[tokio::test]
     async fn test_log_store_rotate() {
         let (pool, _dir) = create_test_db().await;
         let store = LogStore::new(pool);
@@ -566,6 +807,42 @@ mod tests {
         let count = store.count().await.unwrap();
         assert_eq!(count, 0);
     }
+
+    #[tokio::test]
+    async fn test_log_store_rotate_keeps_recent() {
+        let (pool, _dir) = create_test_db().await;
+        let store = LogStore::new(pool);
+
+        store.push(LogEntry::new("api", "prod", LogLevel::Stdout, "msg".to_string())).await;
+        tokio::time::sleep(Duration::from_millis(300)).await;
+
+        // Rotate with 1 hour - should keep recent entries
+        let deleted = store.rotate(Duration::from_secs(3600)).await.unwrap();
+        assert_eq!(deleted, 0);
+
+        let count = store.count().await.unwrap();
+        assert_eq!(count, 1);
+    }
+
+    #[tokio::test]
+    async fn test_log_store_count() {
+        let (pool, _dir) = create_test_db().await;
+        let store = LogStore::new(pool);
+
+        assert_eq!(store.count().await.unwrap(), 0);
+
+        store.push(LogEntry::new("api", "prod", LogLevel::Stdout, "msg1".to_string())).await;
+        store.push(LogEntry::new("api", "prod", LogLevel::Stdout, "msg2".to_string())).await;
+        store.push(LogEntry::new("api", "prod", LogLevel::Stdout, "msg3".to_string())).await;
+
+        tokio::time::sleep(Duration::from_millis(300)).await;
+
+        assert_eq!(store.count().await.unwrap(), 3);
+    }
+
+    // ===================
+    // CONFIG STORE TESTS
+    // ===================
 
     #[tokio::test]
     async fn test_config_store_get_set() {
@@ -586,5 +863,77 @@ mod tests {
         // Delete value
         assert!(store.delete("test_key").await.unwrap());
         assert!(store.get("test_key").await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn test_config_store_multiple_keys() {
+        let (pool, _dir) = create_test_db().await;
+        let store = ConfigStore::new(pool);
+
+        store.set("key1", "value1").await.unwrap();
+        store.set("key2", "value2").await.unwrap();
+        store.set("key3", "value3").await.unwrap();
+
+        assert_eq!(store.get("key1").await.unwrap(), Some("value1".to_string()));
+        assert_eq!(store.get("key2").await.unwrap(), Some("value2".to_string()));
+        assert_eq!(store.get("key3").await.unwrap(), Some("value3".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_config_store_delete_nonexistent() {
+        let (pool, _dir) = create_test_db().await;
+        let store = ConfigStore::new(pool);
+
+        // Deleting non-existent key returns false but doesn't error
+        let result = store.delete("nonexistent").await.unwrap();
+        assert!(!result);
+    }
+
+    #[tokio::test]
+    async fn test_config_store_empty_value() {
+        let (pool, _dir) = create_test_db().await;
+        let store = ConfigStore::new(pool);
+
+        store.set("key", "").await.unwrap();
+        assert_eq!(store.get("key").await.unwrap(), Some("".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_config_store_long_value() {
+        let (pool, _dir) = create_test_db().await;
+        let store = ConfigStore::new(pool);
+
+        let long_value = "x".repeat(10000);
+        store.set("key", &long_value).await.unwrap();
+        assert_eq!(store.get("key").await.unwrap(), Some(long_value));
+    }
+
+    #[tokio::test]
+    async fn test_config_store_special_chars() {
+        let (pool, _dir) = create_test_db().await;
+        let store = ConfigStore::new(pool);
+
+        let special = "value with 'quotes' and \"double quotes\" and\nnewlines";
+        store.set("key", special).await.unwrap();
+        assert_eq!(store.get("key").await.unwrap(), Some(special.to_string()));
+    }
+
+    // ===================
+    // TIMESTAMP CONVERSION TESTS
+    // ===================
+
+    #[test]
+    fn test_millis_to_iso8601_roundtrip() {
+        let original: u64 = 1704067200000; // 2024-01-01 00:00:00 UTC
+        let iso = millis_to_iso8601(original);
+        let back = iso8601_to_millis(&iso);
+        assert_eq!(original, back);
+    }
+
+    #[test]
+    fn test_iso8601_to_millis_invalid() {
+        assert_eq!(iso8601_to_millis("invalid"), 0);
+        assert_eq!(iso8601_to_millis(""), 0);
+        assert_eq!(iso8601_to_millis("2024"), 0);
     }
 }
