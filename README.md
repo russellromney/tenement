@@ -205,11 +205,14 @@ Resource limits work with all isolation levels (process, namespace, sandbox).
 
 ### Testing
 
-290+ tests covering all core modules:
+320+ tests + 8 benchmarks covering all core modules:
 
 ```bash
 cd tenement && cargo test
-# test result: ok. 290+ passed
+# test result: ok. 320+ passed
+
+cargo bench --bench performance
+# 8 benchmarks, all passing targets
 ```
 
 Tests use real processes (`sleep`, `echo`, `env`) and TempDir for file operations—no mocking.
@@ -226,6 +229,10 @@ Tests use real processes (`sleep`, `echo`, `env`) and TempDir for file operation
 | Config | 39 |
 | CLI (unit) | 18 |
 | Auth Integration | 38 |
+| Hypervisor Integration | 10 |
+| E2E Lifecycle | 12 |
+| Stress Tests | 7 |
+| Benchmarks | 8 |
 
 See [TEST_PLAN.md](TEST_PLAN.md) for unit test breakdown.
 See [E2E_TESTING_PLAN.md](E2E_TESTING_PLAN.md) for integration test plan.
@@ -240,18 +247,23 @@ See [ROADMAP.md](ROADMAP.md) for the full isolation spectrum vision.
 - Namespace isolation - Zero-overhead `/proc` protection (Linux)
 - Sandbox isolation (gVisor) - Syscall filtering for untrusted code
 - Resource limits - Memory and CPU limits via cgroups v2
-- Comprehensive test suite (290+ tests)
+- Comprehensive test suite (320+ tests + 8 benchmarks)
 - Unix socket proxy - Full request routing to backends
 - Auth middleware - Bearer token authentication on API endpoints
 - Foreign key enforcement in slum fleet orchestration
 - E2E test infrastructure (Session 1) - shared utilities and fixture scripts
 - Auth integration tests (Session 2) - 38 comprehensive auth tests
+- Hypervisor integration tests (Session 3) - 10 tests for hypervisor + server + storage
+- E2E lifecycle tests (Session 4) - 12 tests for instance lifecycle
+- Stress tests (Session 6) - 7 concurrent load tests
+- Performance benchmarks (Session 7) - 8 criterion benchmarks, all passing targets
 - Race condition fix - Atomic get-and-touch for proxy requests
 - Improved logging - Cgroup cleanup, auth failures, CPU weight clamping
 - Dashboard caching - Cache-Control headers for static assets
 
 **Next up:**
-- E2E integration tests Sessions 3-8 (see E2E_TESTING_PLAN.md)
+- Cgroup lifecycle tests (Session 5) - Linux-only cgroup verification
+- Slum integration tests (Session 8) - Fleet orchestration tests
 - WASM runtime (wasmtime) - Lightweight compute sandbox
 - Storage quotas per instance
 

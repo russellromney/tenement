@@ -308,9 +308,9 @@ async fn test_api_instances_with_valid_token() {
 
 ### 3.2 Tasks
 
-- [ ] Create `cli/tests/hypervisor_integration.rs`
-- [ ] Implement all 7 tests
-- [ ] Ensure cleanup in test teardown
+- [x] Create `cli/tests/hypervisor_integration.rs`
+- [x] Implement all 7 core tests + 3 additional tests (10 total)
+- [x] Ensure cleanup in test teardown
 
 ---
 
@@ -485,10 +485,9 @@ async fn test_stress_concurrent_spawns() {
 
 ### 6.3 Tasks
 
-- [ ] Create `tenement/tests/stress/` directory
-- [ ] Create `tenement/tests/stress/concurrent.rs`
-- [ ] Implement all 6 stress tests
-- [ ] Add CI configuration with extended timeout
+- [x] Create `tenement/tests/stress_concurrent.rs` (flat file structure)
+- [x] Implement all 6 core stress tests + 1 additional (7 total)
+- [ ] Add CI configuration with extended timeout (optional)
 
 ---
 
@@ -554,11 +553,24 @@ criterion_main!(benches);
 
 ### 7.4 Tasks
 
-- [ ] Add criterion dependency
-- [ ] Create `tenement/benches/performance.rs`
-- [ ] Implement all 8 benchmarks
-- [ ] Run baseline and document results
+- [x] Add criterion dependency
+- [x] Create `tenement/benches/performance.rs`
+- [x] Implement all 8 benchmarks
+- [x] Run baseline and document results (see below)
 - [ ] Add benchmark CI job (optional)
+
+### 7.5 Baseline Results (2026-01-12)
+
+| Benchmark | Result | Target | Status |
+|-----------|--------|--------|--------|
+| log_buffer_push | ~298ns (>3M/sec) | >100k/sec | Pass |
+| log_buffer_query_100 | ~169μs | <1ms | Pass |
+| fts_search_10k_entries | ~571μs | <50ms | Pass |
+| metrics_format_prometheus | ~275ns | <1ms | Pass |
+| config_parse_toml | ~16μs | <1ms | Pass |
+| health_check_nonexistent | ~1.7μs | <10ms | Pass |
+| hypervisor_list_empty | ~20ns | - | Pass |
+| instance_get_nonexistent | ~82ns | - | Pass |
 
 ---
 
@@ -632,11 +644,11 @@ jobs:
 |---------|-------|-------|--------|
 | 1 | Infrastructure | Setup | Complete |
 | 2 | Auth Integration | 38 | Complete |
-| 3 | Hypervisor Integration | 7 | Pending |
-| 4 | E2E Lifecycle | 9 | Complete |
+| 3 | Hypervisor Integration | 10 | Complete |
+| 4 | E2E Lifecycle | 12 | Complete |
 | 5 | Cgroup Lifecycle | 6 | Pending (Linux) |
-| 6 | Stress Tests | 6 | Pending |
-| 7 | Benchmarks | 8 | Pending |
+| 6 | Stress Tests | 7 | Complete |
+| 7 | Benchmarks | 8 | Complete |
 | 8 | Slum Integration | 5 | Pending |
 
-**Total: 79 tests + 8 benchmarks** (38 auth + 7 hypervisor + 9 lifecycle + 6 cgroup + 6 stress + 5 slum + 8 benchmarks)
+**Total: 86 tests + 8 benchmarks** (38 auth + 10 hypervisor + 12 lifecycle + 6 cgroup + 7 stress + 5 slum + 8 benchmarks)

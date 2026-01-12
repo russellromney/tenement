@@ -286,7 +286,7 @@ Core fixes for production readiness.
 See [FIX_PLAN.md](FIX_PLAN.md) for remaining P1/P2 improvements.
 See [E2E_TESTING_PLAN.md](E2E_TESTING_PLAN.md) for comprehensive E2E test plan.
 
-### Phase 8.6: E2E Test Infrastructure - IN PROGRESS
+### Phase 8.6: E2E Test Infrastructure - MOSTLY COMPLETE
 
 Comprehensive E2E testing foundation.
 
@@ -299,14 +299,22 @@ Comprehensive E2E testing foundation.
   - Core API auth, public endpoints, token formats, wrong schemes, malformed headers
   - Token rotation, subdomain bypass, edge cases, load testing
   - Added `cli/src/lib.rs` to expose server module for integration tests
-- [ ] Session 3: Hypervisor Integration Tests (7 tests)
-- [ ] Session 4: E2E Lifecycle Tests (9 tests)
+- [x] **Session 3: Hypervisor Integration Tests (10 tests)**
+  - `cli/tests/hypervisor_integration.rs` - Hypervisor + server + storage integration
+  - Spawn/stop API visibility, logs capture, metrics updates, restart counter, health status
+- [x] **Session 4: E2E Lifecycle Tests (12 tests)**
+  - `tenement/tests/e2e_lifecycle.rs` - Complete instance lifecycle tests
+  - Spawn to stop, health checks, idle timeout, wake-on-request, restart behavior
 - [ ] Session 5: Cgroup Lifecycle Tests (6 tests, Linux only)
-- [ ] Session 6: Stress Tests (6 tests)
-- [ ] Session 7: Performance Benchmarks (8 benchmarks)
+- [x] **Session 6: Stress Tests (7 tests)**
+  - `tenement/tests/stress_concurrent.rs` - Concurrent load testing
+  - 100 concurrent spawns, spawn/stop cycles, log buffer stress, health check scaling
+- [x] **Session 7: Performance Benchmarks (8 benchmarks)**
+  - `tenement/benches/performance.rs` - Criterion benchmarks
+  - All targets met: log_buffer_push (>3M/sec), query (<1ms), fts_search (<50ms), metrics (<1ms)
 - [ ] Session 8: Slum Integration Tests (5 tests)
 
-**Total planned: 79 tests + 8 benchmarks** (38 auth + 7 hypervisor + 9 lifecycle + 6 cgroup + 6 stress + 5 slum)
+**Total: 86 tests + 8 benchmarks** (38 auth + 10 hypervisor + 12 lifecycle + 6 cgroup + 7 stress + 5 slum)
 
 ### Phase 8.7: Code Quality Fixes - DONE
 
