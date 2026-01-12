@@ -65,8 +65,13 @@ async fn main() -> Result<()> {
 
     match cli.command {
         Commands::Serve { port, domain } => {
-            let hypervisor = Hypervisor::from_config_file()?;
-            server::serve(hypervisor, domain, port).await?;
+            let config = Config::load()?;
+            let db_path = PathBuf::from(&config.settings.data_dir).join("tenement.db");
+            let pool = init_db(&db_path).await?;
+            let config_store = std::sync::Arc::new(ConfigStore::new(pool));
+
+            let hypervisor = Hypervisor::new(config);
+            server::serve(hypervisor, domain, port, config_store).await?;
         }
         Commands::Spawn { process, id } => {
             let hypervisor = Hypervisor::from_config_file()?;

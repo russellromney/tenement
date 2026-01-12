@@ -5,6 +5,7 @@ use axum::{
     body::Body,
     extract::{Host, Query, State},
     http::{Request, StatusCode},
+    middleware::{self, Next},
     response::{
         sse::{Event, KeepAlive, Sse},
         IntoResponse, Json, Response,
@@ -14,10 +15,12 @@ use axum::{
 };
 use futures::stream::Stream;
 use hyper_util::{client::legacy::Client, rt::TokioExecutor};
+use hyperlocal::UnixConnector;
 use serde::{Deserialize, Serialize};
 use std::convert::Infallible;
+use std::path::Path;
 use std::sync::Arc;
-use tenement::{Hypervisor, LogLevel, LogQuery};
+use tenement::{ConfigStore, Hypervisor, LogLevel, LogQuery, TokenStore};
 use tokio_stream::wrappers::BroadcastStream;
 use tokio_stream::StreamExt;
 use tower_http::trace::TraceLayer;
@@ -28,6 +31,7 @@ pub struct AppState {
     pub hypervisor: Arc<Hypervisor>,
     pub domain: String,
     pub client: Client<hyper_util::client::legacy::connect::HttpConnector, Body>,
+    pub config_store: Arc<ConfigStore>,
 }
 
 /// Create the router (exposed for testing)
@@ -44,18 +48,78 @@ pub fn create_router(state: AppState) -> Router {
         .route("/assets/*path", get(dashboard_asset))
         // Fallback handles subdomain routing
         .fallback(handle_request)
+        .layer(middleware::from_fn_with_state(state.clone(), auth_middleware))
         .layer(TraceLayer::new_for_http())
         .with_state(state)
 }
 
+/// Auth middleware - requires Bearer token for API endpoints
+async fn auth_middleware(
+    State(state): State<AppState>,
+    req: Request<Body>,
+    next: Next,
+) -> Result<Response, StatusCode> {
+    let path = req.uri().path();
+
+    // Skip auth for public endpoints
+    if path == "/health" || path == "/metrics" || path == "/" || path.starts_with("/assets/") {
+        return Ok(next.run(req).await);
+    }
+
+    // Skip auth for subdomain requests (they go through the fallback handler)
+    // The fallback handler will handle any subdomain-specific auth if needed
+    let host = req
+        .headers()
+        .get("host")
+        .and_then(|h| h.to_str().ok())
+        .unwrap_or("");
+    if parse_subdomain(host, &state.domain).is_some() {
+        return Ok(next.run(req).await);
+    }
+
+    // Extract token from Authorization header
+    let auth_header = req
+        .headers()
+        .get("authorization")
+        .and_then(|v| v.to_str().ok());
+
+    let token = match auth_header {
+        Some(h) if h.to_lowercase().starts_with("bearer ") => &h[7..],
+        _ => {
+            tracing::debug!("Missing or invalid Authorization header");
+            return Err(StatusCode::UNAUTHORIZED);
+        }
+    };
+
+    // Verify token using TokenStore
+    let token_store = TokenStore::new(&state.config_store);
+    match token_store.verify(token).await {
+        Ok(true) => Ok(next.run(req).await),
+        Ok(false) => {
+            tracing::debug!("Invalid token provided");
+            Err(StatusCode::UNAUTHORIZED)
+        }
+        Err(e) => {
+            tracing::error!("Token verification error: {}", e);
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
+}
+
 /// Start the HTTP server
-pub async fn serve(hypervisor: Arc<Hypervisor>, domain: String, port: u16) -> Result<()> {
+pub async fn serve(
+    hypervisor: Arc<Hypervisor>,
+    domain: String,
+    port: u16,
+    config_store: Arc<ConfigStore>,
+) -> Result<()> {
     let client = Client::builder(TokioExecutor::new()).build_http();
 
     let state = AppState {
         hypervisor,
         domain: domain.clone(),
         client,
+        config_store,
     };
 
     let app = create_router(state);
@@ -271,7 +335,7 @@ async fn proxy_to_instance(
     state: &AppState,
     process: &str,
     id: &str,
-    _req: Request<Body>,
+    req: Request<Body>,
 ) -> Response {
     // Check if instance is running
     let is_running = state.hypervisor.is_running(process, id).await;
@@ -314,23 +378,70 @@ async fn proxy_to_instance(
         }
     };
 
-    // TODO: Actually proxy to unix socket
-    // For now, return a placeholder
-    tracing::debug!("Would proxy to socket: {}", socket_path.display());
+    // Proxy to Unix socket
+    proxy_to_unix_socket(&socket_path, req).await
+}
 
-    // Placeholder response
-    (
-        StatusCode::BAD_GATEWAY,
-        format!("Proxy to {} not yet implemented", socket_path.display()),
-    )
-        .into_response()
+/// Proxy an HTTP request to a Unix socket
+async fn proxy_to_unix_socket(socket_path: &Path, req: Request<Body>) -> Response {
+    // Create Unix socket client
+    let connector = UnixConnector;
+    let client: Client<UnixConnector, Body> = Client::builder(TokioExecutor::new()).build(connector);
+
+    // Build URI for Unix socket - hyperlocal requires a special URI format
+    let path_and_query = req
+        .uri()
+        .path_and_query()
+        .map(|pq| pq.as_str())
+        .unwrap_or("/");
+    let socket_uri = hyperlocal::Uri::new(socket_path, path_and_query);
+
+    // Build proxy request preserving method and headers
+    let mut proxy_req = Request::builder()
+        .method(req.method())
+        .uri(socket_uri);
+
+    // Copy headers from original request
+    for (key, value) in req.headers() {
+        proxy_req = proxy_req.header(key, value);
+    }
+
+    let proxy_req = match proxy_req.body(req.into_body()) {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::error!("Failed to build proxy request: {}", e);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to build proxy request: {}", e),
+            )
+                .into_response();
+        }
+    };
+
+    // Forward request to Unix socket
+    match client.request(proxy_req).await {
+        Ok(response) => {
+            // Convert hyper Response to axum Response
+            let (parts, body) = response.into_parts();
+            Response::from_parts(parts, Body::new(body))
+        }
+        Err(e) => {
+            tracing::error!("Proxy error to {}: {}", socket_path.display(), e);
+            (
+                StatusCode::BAD_GATEWAY,
+                format!("Proxy error: {}", e),
+            )
+                .into_response()
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use axum_test::TestServer;
-    use tenement::Config;
+    use tempfile::TempDir;
+    use tenement::{init_db, Config};
 
     #[test]
     fn test_parse_subdomain() {
@@ -355,20 +466,33 @@ mod tests {
         assert_eq!(parse_subdomain("", "example.com"), None);
     }
 
-    fn create_test_state() -> AppState {
+    /// Create test state with auth token
+    /// Returns (state, token, temp_dir) - temp_dir must be kept alive during test
+    async fn create_test_state() -> (AppState, String, TempDir) {
+        let dir = TempDir::new().unwrap();
+        let db_path = dir.path().join("test.db");
+        let pool = init_db(&db_path).await.unwrap();
+        let config_store = Arc::new(ConfigStore::new(pool));
+
+        // Generate and store a test token
+        let token_store = TokenStore::new(&config_store);
+        let token = token_store.generate_and_store().await.unwrap();
+
         let config = Config::default();
         let hypervisor = Hypervisor::new(config);
         let client = Client::builder(TokioExecutor::new()).build_http();
-        AppState {
+        let state = AppState {
             hypervisor,
             domain: "example.com".to_string(),
             client,
-        }
+            config_store,
+        };
+        (state, token, dir)
     }
 
     #[tokio::test]
     async fn test_health_endpoint() {
-        let state = create_test_state();
+        let (state, _token, _dir) = create_test_state().await;
         let app = create_router(state);
         let server = TestServer::new(app).unwrap();
 
@@ -381,11 +505,14 @@ mod tests {
 
     #[tokio::test]
     async fn test_instances_endpoint_empty() {
-        let state = create_test_state();
+        let (state, token, _dir) = create_test_state().await;
         let app = create_router(state);
         let server = TestServer::new(app).unwrap();
 
-        let response = server.get("/api/instances").await;
+        let response = server
+            .get("/api/instances")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .await;
         response.assert_status_ok();
 
         let json: Vec<serde_json::Value> = response.json();
@@ -394,7 +521,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_dashboard_endpoint() {
-        let state = create_test_state();
+        let (state, _token, _dir) = create_test_state().await;
         let app = create_router(state);
         let server = TestServer::new(app).unwrap();
 
@@ -405,7 +532,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_unknown_subdomain_returns_404() {
-        let state = create_test_state();
+        let (state, _token, _dir) = create_test_state().await;
         let app = create_router(state);
         let server = TestServer::new(app).unwrap();
 
@@ -421,11 +548,14 @@ mod tests {
 
     #[tokio::test]
     async fn test_logs_endpoint_empty() {
-        let state = create_test_state();
+        let (state, token, _dir) = create_test_state().await;
         let app = create_router(state);
         let server = TestServer::new(app).unwrap();
 
-        let response = server.get("/api/logs").await;
+        let response = server
+            .get("/api/logs")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .await;
         response.assert_status_ok();
 
         let json: Vec<serde_json::Value> = response.json();
@@ -434,7 +564,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_logs_endpoint_with_entries() {
-        let state = create_test_state();
+        let (state, token, _dir) = create_test_state().await;
         let log_buffer = state.hypervisor.log_buffer();
 
         // Add some log entries
@@ -444,7 +574,10 @@ mod tests {
         let app = create_router(state);
         let server = TestServer::new(app).unwrap();
 
-        let response = server.get("/api/logs").await;
+        let response = server
+            .get("/api/logs")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .await;
         response.assert_status_ok();
 
         let json: Vec<serde_json::Value> = response.json();
@@ -453,7 +586,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_logs_endpoint_filter_by_process() {
-        let state = create_test_state();
+        let (state, token, _dir) = create_test_state().await;
         let log_buffer = state.hypervisor.log_buffer();
 
         // Add entries for different processes
@@ -463,7 +596,10 @@ mod tests {
         let app = create_router(state);
         let server = TestServer::new(app).unwrap();
 
-        let response = server.get("/api/logs?process=api").await;
+        let response = server
+            .get("/api/logs?process=api")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .await;
         response.assert_status_ok();
 
         let json: Vec<serde_json::Value> = response.json();
@@ -473,7 +609,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_logs_endpoint_filter_by_id() {
-        let state = create_test_state();
+        let (state, token, _dir) = create_test_state().await;
         let log_buffer = state.hypervisor.log_buffer();
 
         // Add entries for different instances
@@ -483,7 +619,10 @@ mod tests {
         let app = create_router(state);
         let server = TestServer::new(app).unwrap();
 
-        let response = server.get("/api/logs?id=prod").await;
+        let response = server
+            .get("/api/logs?id=prod")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .await;
         response.assert_status_ok();
 
         let json: Vec<serde_json::Value> = response.json();
@@ -493,7 +632,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_logs_endpoint_filter_by_level() {
-        let state = create_test_state();
+        let (state, token, _dir) = create_test_state().await;
         let log_buffer = state.hypervisor.log_buffer();
 
         // Add stdout and stderr entries
@@ -503,7 +642,10 @@ mod tests {
         let app = create_router(state);
         let server = TestServer::new(app).unwrap();
 
-        let response = server.get("/api/logs?level=stderr").await;
+        let response = server
+            .get("/api/logs?level=stderr")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .await;
         response.assert_status_ok();
 
         let json: Vec<serde_json::Value> = response.json();
@@ -513,7 +655,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_logs_endpoint_with_limit() {
-        let state = create_test_state();
+        let (state, token, _dir) = create_test_state().await;
         let log_buffer = state.hypervisor.log_buffer();
 
         // Add multiple entries
@@ -524,7 +666,10 @@ mod tests {
         let app = create_router(state);
         let server = TestServer::new(app).unwrap();
 
-        let response = server.get("/api/logs?limit=2").await;
+        let response = server
+            .get("/api/logs?limit=2")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .await;
         response.assert_status_ok();
 
         let json: Vec<serde_json::Value> = response.json();
@@ -533,7 +678,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_logs_endpoint_search() {
-        let state = create_test_state();
+        let (state, token, _dir) = create_test_state().await;
         let log_buffer = state.hypervisor.log_buffer();
 
         // Add entries with different content
@@ -544,7 +689,10 @@ mod tests {
         let app = create_router(state);
         let server = TestServer::new(app).unwrap();
 
-        let response = server.get("/api/logs?search=hello").await;
+        let response = server
+            .get("/api/logs?search=hello")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .await;
         response.assert_status_ok();
 
         let json: Vec<serde_json::Value> = response.json();
@@ -553,7 +701,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_metrics_endpoint() {
-        let state = create_test_state();
+        let (state, _token, _dir) = create_test_state().await;
         let app = create_router(state);
         let server = TestServer::new(app).unwrap();
 
@@ -567,5 +715,33 @@ mod tests {
         assert!(text.contains("# HELP tenement_instances_up"));
         assert!(text.contains("# TYPE tenement_instances_up gauge"));
         assert!(text.contains("tenement_instances_up 0"));
+    }
+
+    #[tokio::test]
+    async fn test_api_requires_auth() {
+        let (state, _token, _dir) = create_test_state().await;
+        let app = create_router(state);
+        let server = TestServer::new(app).unwrap();
+
+        // API endpoints should return 401 without token
+        let response = server.get("/api/instances").await;
+        response.assert_status_unauthorized();
+
+        let response = server.get("/api/logs").await;
+        response.assert_status_unauthorized();
+    }
+
+    #[tokio::test]
+    async fn test_api_invalid_token() {
+        let (state, _token, _dir) = create_test_state().await;
+        let app = create_router(state);
+        let server = TestServer::new(app).unwrap();
+
+        // Invalid token should return 401
+        let response = server
+            .get("/api/instances")
+            .add_header("Authorization", "Bearer invalid_token")
+            .await;
+        response.assert_status_unauthorized();
     }
 }

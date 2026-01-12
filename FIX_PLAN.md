@@ -65,9 +65,9 @@ hyperlocal = "0.9"
 ```
 
 **Tasks:**
-- [ ] Add hyperlocal dependency
-- [ ] Implement Unix socket proxy
-- [ ] Add tests for proxy functionality
+- [x] Add hyperlocal dependency
+- [x] Implement Unix socket proxy
+- [x] Add tests for proxy functionality
 - [ ] Test with real backend process
 
 ---
@@ -148,11 +148,11 @@ pub fn create_router(state: AppState) -> Router {
 ```
 
 **Tasks:**
-- [ ] Add ConfigStore to AppState
-- [ ] Create auth middleware function
-- [ ] Wire middleware to router
-- [ ] Update serve() to initialize ConfigStore
-- [ ] Add CLI flag for initial token generation
+- [x] Add ConfigStore to AppState
+- [x] Create auth middleware function
+- [x] Wire middleware to router
+- [x] Update serve() to initialize ConfigStore
+- [x] Add CLI flag for initial token generation (already exists as `ten token-gen`)
 
 ---
 
@@ -174,8 +174,8 @@ sqlx::query("PRAGMA foreign_keys = ON")
 ```
 
 **Tasks:**
-- [ ] Add PRAGMA foreign_keys = ON
-- [ ] Add test that violating FK constraint fails
+- [x] Add PRAGMA foreign_keys = ON
+- [x] Add test that violating FK constraint fails
 
 ---
 

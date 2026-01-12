@@ -97,6 +97,12 @@ impl SlumDb {
             .await
             .context("Failed to connect to SQLite database")?;
 
+        // Enable foreign key constraints
+        sqlx::query("PRAGMA foreign_keys = ON")
+            .execute(&pool)
+            .await
+            .context("Failed to enable foreign keys")?;
+
         // Create tables
         sqlx::query(
             r#"
@@ -434,6 +440,16 @@ mod tests {
         // Route non-existent domain
         let not_found = db.route("unknown.example.com").await.unwrap();
         assert!(not_found.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_foreign_key_constraint() {
+        let (db, _dir) = create_test_db().await;
+
+        // Try to add tenant with non-existent server_id - should fail
+        let tenant = test_tenant("tenant1", "nonexistent_server");
+        let result = db.add_tenant(&tenant).await;
+        assert!(result.is_err(), "Should fail due to FK constraint");
     }
 
     #[test]

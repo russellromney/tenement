@@ -30,6 +30,7 @@ futures = "0.3"
 tokio-stream = { version = "0.1", features = ["sync"] }
 rust-embed.workspace = true
 mime_guess.workspace = true
+hyperlocal = "0.9"
 
 [dev-dependencies]
 axum-test = "16"
