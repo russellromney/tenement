@@ -337,43 +337,35 @@ async fn proxy_to_instance(
     id: &str,
     req: Request<Body>,
 ) -> Response {
-    // Check if instance is running
-    let is_running = state.hypervisor.is_running(process, id).await;
-
-    let socket_path = if is_running {
-        // Instance is running - touch activity and get socket path
-        state.hypervisor.touch_activity(process, id).await;
-        match state.hypervisor.get(process, id).await {
-            Some(info) => info.socket,
-            None => {
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "Instance disappeared unexpectedly",
-                )
-                    .into_response()
-            }
+    // Use atomic get-and-touch to prevent race condition where instance
+    // could be reaped between checking if running and touching activity.
+    let socket_path = match state.hypervisor.get_and_touch(process, id).await {
+        Some(info) => {
+            // Instance is running - activity already touched
+            info.socket
         }
-    } else {
-        // Instance not running - check if process is configured
-        if !state.hypervisor.has_process(process) {
-            return (
-                StatusCode::NOT_FOUND,
-                format!("Process '{}' not configured", process),
-            )
-                .into_response();
-        }
-
-        // Wake-on-request: spawn and wait for instance to be ready
-        tracing::info!("Waking instance {}:{}", process, id);
-        match state.hypervisor.spawn_and_wait(process, id).await {
-            Ok(socket) => socket,
-            Err(e) => {
-                tracing::error!("Failed to wake instance {}:{}: {}", process, id, e);
+        None => {
+            // Instance not running - check if process is configured
+            if !state.hypervisor.has_process(process) {
                 return (
-                    StatusCode::SERVICE_UNAVAILABLE,
-                    format!("Failed to start instance: {}", e),
+                    StatusCode::NOT_FOUND,
+                    format!("Process '{}' not configured", process),
                 )
                     .into_response();
+            }
+
+            // Wake-on-request: spawn and wait for instance to be ready
+            tracing::info!("Waking instance {}:{}", process, id);
+            match state.hypervisor.spawn_and_wait(process, id).await {
+                Ok(socket) => socket,
+                Err(e) => {
+                    tracing::error!("Failed to wake instance {}:{}: {}", process, id, e);
+                    return (
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        format!("Failed to start instance: {}", e),
+                    )
+                        .into_response();
+                }
             }
         }
     };

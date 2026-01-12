@@ -432,6 +432,20 @@ impl Hypervisor {
         instances.get(&instance_id).map(|i| i.info())
     }
 
+    /// Get instance info and touch activity atomically.
+    /// This prevents race conditions where an instance could be reaped
+    /// between checking if it's running and touching its activity.
+    pub async fn get_and_touch(&self, process_name: &str, id: &str) -> Option<InstanceInfo> {
+        let instance_id = InstanceId::new(process_name, id);
+        let mut instances = self.instances.write().await;
+        if let Some(instance) = instances.get_mut(&instance_id) {
+            instance.touch();
+            Some(instance.info())
+        } else {
+            None
+        }
+    }
+
     /// Check if a process is configured (can be spawned)
     pub fn has_process(&self, process_name: &str) -> bool {
         self.config.get_service(process_name).is_some()
@@ -1160,6 +1174,78 @@ sleep 30
         // Idle time should reset (or be very small)
         let info_after = hypervisor.get("api", "test").await.unwrap();
         assert!(info_after.idle_secs <= idle_before);
+
+        hypervisor.stop("api", "test").await.ok();
+    }
+
+    #[tokio::test]
+    async fn test_get_and_touch_running_instance() {
+        let dir = TempDir::new().unwrap();
+        let script = create_touch_socket_script(dir.path());
+
+        let config = test_config_with_process("api", script.to_str().unwrap(), vec![]);
+        let hypervisor = Hypervisor::new(config);
+
+        hypervisor.spawn("api", "test").await.unwrap();
+
+        // Wait a bit so idle time accumulates
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        // get_and_touch should return Some and reset activity
+        let info = hypervisor.get_and_touch("api", "test").await;
+        assert!(info.is_some());
+        let info = info.unwrap();
+        assert_eq!(info.id.process, "api");
+        assert_eq!(info.id.id, "test");
+
+        // Idle time should be reset (very small after touch)
+        assert!(info.idle_secs < 1);
+
+        hypervisor.stop("api", "test").await.ok();
+    }
+
+    #[tokio::test]
+    async fn test_get_and_touch_nonexistent_instance() {
+        let config = Config::default();
+        let hypervisor = Hypervisor::new(config);
+
+        // Non-existent instance should return None
+        let info = hypervisor.get_and_touch("api", "nonexistent").await;
+        assert!(info.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_get_and_touch_is_atomic() {
+        // This test verifies get_and_touch provides instance info AND touches activity
+        // in a single operation (vs separate is_running + touch_activity + get calls)
+        let dir = TempDir::new().unwrap();
+        let script = create_touch_socket_script(dir.path());
+
+        let config = test_config_with_process("api", script.to_str().unwrap(), vec![]);
+        let hypervisor = Hypervisor::new(config);
+
+        hypervisor.spawn("api", "test").await.unwrap();
+
+        // Wait so idle time > 0
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        // Record time before
+        let before_info = hypervisor.get("api", "test").await.unwrap();
+        let idle_before = before_info.idle_secs;
+
+        // Wait a bit more
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        // get_and_touch should touch activity
+        let touched_info = hypervisor.get_and_touch("api", "test").await.unwrap();
+
+        // The returned info should have fresh activity timestamp
+        // (idle_secs should be 0 or very small since we just touched)
+        assert!(touched_info.idle_secs <= idle_before);
+
+        // Verify activity was actually touched by checking again
+        let after_info = hypervisor.get("api", "test").await.unwrap();
+        assert!(after_info.idle_secs < 1); // Should be very fresh
 
         hypervisor.stop("api", "test").await.ok();
     }

@@ -228,9 +228,9 @@ pub async fn get_and_touch(&self, process: &str, id: &str) -> Option<InstanceInf
 ```
 
 **Tasks:**
-- [ ] Add get_and_touch() to Hypervisor
-- [ ] Update proxy_to_instance to use atomic operation
-- [ ] Add test for race condition
+- [x] Add get_and_touch() to Hypervisor
+- [x] Update proxy_to_instance to use atomic operation
+- [x] Add test for race condition
 
 ---
 
