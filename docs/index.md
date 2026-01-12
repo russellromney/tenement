@@ -40,6 +40,8 @@ tenement gives you:
 - **Auto-restart** - Health checks with automatic recovery
 - **Zero overhead** - Direct Unix socket IPC, no network layer
 - **Simple config** - One TOML file defines everything
+- **Isolation levels** - namespace, sandbox (gVisor), or bare process
+- **Resource limits** - Memory and CPU limits via cgroups v2
 
 ## Quick Start
 
@@ -47,12 +49,13 @@ tenement gives you:
 
 ```toml
 # tenement.toml
-[process.api]
+[service.api]
 command = "./my-api"
 socket = "/tmp/api-{id}.sock"
 health = "/health"
+memory_limit_mb = 256        # Optional: resource limits
 
-[process.api.env]
+[service.api.env]
 DATABASE_PATH = "{data_dir}/{id}/app.db"
 ```
 
@@ -130,13 +133,15 @@ tenement restart api:dev
 ### Microservices on a VPS
 Run multiple services without container overhead:
 ```toml
-[process.api]
+[service.api]
 command = "./api"
+memory_limit_mb = 256
 
-[process.worker]
+[service.worker]
 command = "./worker"
+isolation = "sandbox"    # Untrusted code in gVisor
 
-[process.web]
+[service.web]
 command = "./web"
 ```
 

@@ -1,25 +1,44 @@
 //! Configuration parsing for tenement.toml
 
+use crate::runtime::RuntimeType;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+/// Raw config structure for TOML parsing (internal use)
+#[derive(Debug, Clone, Deserialize)]
+struct RawConfig {
+    #[serde(default)]
+    settings: Settings,
+    #[serde(default)]
+    service: HashMap<String, ProcessConfig>,
+    #[serde(default)]
+    process: HashMap<String, ProcessConfig>,
+    #[serde(default)]
+    routing: RoutingConfig,
+}
+
 /// Main configuration structure
+///
+/// Supports both `[process.X]` (legacy) and `[service.X]` (preferred) section names.
+/// Both are merged together during loading - `[process.X]` is an alias for `[service.X]`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     /// Global settings
     #[serde(default)]
     pub settings: Settings,
 
-    /// Process definitions (templates)
+    /// Service definitions (templates)
+    /// Both `[service.X]` and `[process.X]` sections are merged here
     #[serde(default)]
-    pub process: HashMap<String, ProcessConfig>,
+    pub service: HashMap<String, ProcessConfig>,
 
     /// Routing rules
     #[serde(default)]
     pub routing: RoutingConfig,
 }
+
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Settings {
@@ -38,6 +57,15 @@ pub struct Settings {
     /// Restart window in seconds
     #[serde(default = "default_restart_window")]
     pub restart_window: u64,
+
+    /// Base delay for exponential backoff (in milliseconds)
+    /// Delay = base * 2^(restart_count - 1), capped at backoff_max
+    #[serde(default = "default_backoff_base_ms")]
+    pub backoff_base_ms: u64,
+
+    /// Maximum backoff delay (in milliseconds)
+    #[serde(default = "default_backoff_max_ms")]
+    pub backoff_max_ms: u64,
 }
 
 impl Default for Settings {
@@ -47,6 +75,8 @@ impl Default for Settings {
             health_check_interval: default_health_interval(),
             max_restarts: default_max_restarts(),
             restart_window: default_restart_window(),
+            backoff_base_ms: default_backoff_base_ms(),
+            backoff_max_ms: default_backoff_max_ms(),
         }
     }
 }
@@ -67,9 +97,22 @@ fn default_restart_window() -> u64 {
     300
 }
 
-/// Process template definition
+fn default_backoff_base_ms() -> u64 {
+    1000 // 1 second
+}
+
+fn default_backoff_max_ms() -> u64 {
+    60000 // 60 seconds
+}
+
+/// Service template definition (also known as ProcessConfig for backwards compatibility)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProcessConfig {
+    /// Isolation level: "namespace" (default), "process", "firecracker", or "qemu"
+    /// Also accepts "runtime" as an alias for backwards compatibility
+    #[serde(default, alias = "runtime")]
+    pub isolation: RuntimeType,
+
     /// Command to run (supports {name}, {id}, {data_dir} interpolation)
     pub command: String,
 
@@ -96,6 +139,66 @@ pub struct ProcessConfig {
     /// Restart policy: "always", "on-failure", "never"
     #[serde(default = "default_restart_policy")]
     pub restart: String,
+
+    /// Idle timeout in seconds before auto-stopping (0 = never stop)
+    /// When set, instance will be stopped after this many seconds of inactivity.
+    /// Health checks do NOT count as activity - only real requests do.
+    #[serde(default)]
+    pub idle_timeout: Option<u64>,
+
+    /// Startup timeout in seconds (default: 10)
+    /// How long to wait for a process to create its socket before giving up.
+    #[serde(default = "default_startup_timeout")]
+    pub startup_timeout: u64,
+
+    // --- Resource limits (cgroups v2 on Linux) ---
+
+    /// Memory limit in MB (0 = unlimited)
+    /// Applied via cgroups v2 on Linux for process/namespace/sandbox isolation.
+    /// For Firecracker/QEMU VMs, this sets the VM memory.
+    #[serde(default)]
+    pub memory_limit_mb: Option<u32>,
+
+    /// CPU weight (1-10000, default 100)
+    /// Higher values get more CPU time relative to other services.
+    /// Applied via cgroups v2 cpu.weight on Linux.
+    /// 100 = normal priority, 1 = minimum, 10000 = maximum
+    #[serde(default)]
+    pub cpu_shares: Option<u32>,
+
+    // --- Firecracker/QEMU-specific fields ---
+
+    /// Path to kernel image (required for firecracker runtime)
+    #[serde(default)]
+    pub kernel: Option<PathBuf>,
+
+    /// Path to root filesystem image (required for firecracker runtime)
+    #[serde(default)]
+    pub rootfs: Option<PathBuf>,
+
+    /// Memory in MB for VM (firecracker/qemu only, default 256)
+    #[serde(default = "default_memory_mb")]
+    pub memory_mb: u32,
+
+    /// Number of vCPUs (firecracker/qemu only)
+    #[serde(default = "default_vcpus")]
+    pub vcpus: u32,
+
+    /// VSOCK port for guest communication (firecracker only)
+    #[serde(default = "default_vsock_port")]
+    pub vsock_port: u32,
+}
+
+fn default_memory_mb() -> u32 {
+    256
+}
+
+fn default_vcpus() -> u32 {
+    1
+}
+
+fn default_vsock_port() -> u32 {
+    5000
 }
 
 fn default_socket() -> String {
@@ -104,6 +207,10 @@ fn default_socket() -> String {
 
 fn default_restart_policy() -> String {
     "on-failure".to_string()
+}
+
+fn default_startup_timeout() -> u64 {
+    10
 }
 
 /// Routing configuration
@@ -125,7 +232,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             settings: Settings::default(),
-            process: HashMap::new(),
+            service: HashMap::new(),
             routing: RoutingConfig::default(),
         }
     }
@@ -139,14 +246,40 @@ impl Config {
     }
 
     /// Load config from a specific path
+    ///
+    /// Supports both `[service.X]` (preferred) and `[process.X]` (legacy) sections.
+    /// Both are merged into the `service` field.
     pub fn load_from_path(path: &Path) -> Result<Self> {
         let content = std::fs::read_to_string(path)
             .with_context(|| format!("Failed to read config file: {}", path.display()))?;
 
-        let config: Config = toml::from_str(&content)
-            .with_context(|| format!("Failed to parse config file: {}", path.display()))?;
+        Self::from_str(&content)
+            .with_context(|| format!("Failed to parse config file: {}", path.display()))
+    }
 
-        Ok(config)
+    /// Parse config from a TOML string
+    ///
+    /// Supports both `[service.X]` (preferred) and `[process.X]` (legacy) sections.
+    pub fn from_str(content: &str) -> Result<Self> {
+        let raw: RawConfig = toml::from_str(content)?;
+
+        // Merge process (legacy) and service (preferred) sections
+        let mut service = raw.service;
+        for (name, config) in raw.process {
+            if service.contains_key(&name) {
+                anyhow::bail!(
+                    "Service '{}' defined in both [service.{}] and [process.{}]. Use only one.",
+                    name, name, name
+                );
+            }
+            service.insert(name, config);
+        }
+
+        Ok(Config {
+            settings: raw.settings,
+            service,
+            routing: raw.routing,
+        })
     }
 
     /// Find tenement.toml by walking up from current directory
@@ -170,13 +303,49 @@ impl Config {
         }
     }
 
-    /// Get a process config by name
+    /// Get a service config by name
+    pub fn get_service(&self, name: &str) -> Option<&ProcessConfig> {
+        self.service.get(name)
+    }
+
+    /// Get a process config by name (legacy alias for get_service)
+    #[deprecated(since = "0.4.0", note = "Use get_service() instead")]
     pub fn get_process(&self, name: &str) -> Option<&ProcessConfig> {
-        self.process.get(name)
+        self.get_service(name)
     }
 }
 
 impl ProcessConfig {
+    /// Validate config for the specified isolation level
+    pub fn validate(&self, name: &str) -> Result<()> {
+        if self.isolation == RuntimeType::Firecracker {
+            if self.kernel.is_none() {
+                anyhow::bail!(
+                    "Service '{}' uses firecracker isolation but 'kernel' is not specified",
+                    name
+                );
+            }
+            if self.rootfs.is_none() {
+                anyhow::bail!(
+                    "Service '{}' uses firecracker isolation but 'rootfs' is not specified",
+                    name
+                );
+            }
+        }
+        Ok(())
+    }
+
+    /// Get the isolation level (preferred name)
+    pub fn isolation(&self) -> RuntimeType {
+        self.isolation
+    }
+
+    /// Get the runtime type (legacy alias for isolation)
+    #[deprecated(since = "0.4.0", note = "Use isolation() instead")]
+    pub fn runtime(&self) -> RuntimeType {
+        self.isolation
+    }
+
     /// Interpolate variables in a string
     /// Supports: {name}, {id}, {data_dir}, {socket}
     pub fn interpolate(&self, template: &str, name: &str, id: &str, data_dir: &Path) -> String {
@@ -223,15 +392,31 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_parse_minimal_config() {
+    fn test_parse_minimal_config_legacy_process() {
+        // Test legacy [process.X] format still works
         let config_str = r#"
 [process.api]
 command = "./api-server"
 "#;
-        let config: Config = toml::from_str(config_str).unwrap();
+        let config = Config::from_str(config_str).unwrap();
 
-        assert!(config.process.contains_key("api"));
-        let api = config.get_process("api").unwrap();
+        assert!(config.service.contains_key("api"));
+        let api = config.get_service("api").unwrap();
+        assert_eq!(api.command, "./api-server");
+        assert_eq!(api.socket, "/tmp/{name}-{id}.sock");
+    }
+
+    #[test]
+    fn test_parse_minimal_config_new_service() {
+        // Test new [service.X] format
+        let config_str = r#"
+[service.api]
+command = "./api-server"
+"#;
+        let config = Config::from_str(config_str).unwrap();
+
+        assert!(config.service.contains_key("api"));
+        let api = config.get_service("api").unwrap();
         assert_eq!(api.command, "./api-server");
         assert_eq!(api.socket, "/tmp/{name}-{id}.sock");
     }
@@ -243,14 +428,14 @@ command = "./api-server"
 data_dir = "/data/tenement"
 health_check_interval = 30
 
-[process.api]
+[service.api]
 command = "./api"
 args = ["--port", "8080"]
 socket = "/tmp/api-{id}.sock"
 health = "/health"
 restart = "always"
 
-[process.api.env]
+[service.api.env]
 DATABASE_PATH = "{data_dir}/{id}/app.db"
 LOG_LEVEL = "info"
 
@@ -261,12 +446,12 @@ default = "api"
 "api.example.com" = "api"
 "*.example.com" = "api"
 "#;
-        let config: Config = toml::from_str(config_str).unwrap();
+        let config = Config::from_str(config_str).unwrap();
 
         assert_eq!(config.settings.data_dir, PathBuf::from("/data/tenement"));
         assert_eq!(config.settings.health_check_interval, 30);
 
-        let api = config.get_process("api").unwrap();
+        let api = config.get_service("api").unwrap();
         assert_eq!(api.command, "./api");
         assert_eq!(api.args, vec!["--port", "8080"]);
         assert_eq!(api.health, Some("/health".to_string()));
@@ -279,16 +464,16 @@ default = "api"
     #[test]
     fn test_interpolation() {
         let config_str = r#"
-[process.api]
+[service.api]
 command = "./api"
 socket = "/tmp/{name}-{id}.sock"
 
-[process.api.env]
+[service.api.env]
 DB = "{data_dir}/{id}/app.db"
 SOCKET = "{socket}"
 "#;
-        let config: Config = toml::from_str(config_str).unwrap();
-        let api = config.get_process("api").unwrap();
+        let config = Config::from_str(config_str).unwrap();
+        let api = config.get_service("api").unwrap();
 
         let data_dir = PathBuf::from("/var/lib/tenement");
 
@@ -303,10 +488,10 @@ SOCKET = "{socket}"
     #[test]
     fn test_default_settings() {
         let config_str = r#"
-[process.api]
+[service.api]
 command = "./api"
 "#;
-        let config: Config = toml::from_str(config_str).unwrap();
+        let config = Config::from_str(config_str).unwrap();
 
         assert_eq!(config.settings.data_dir, PathBuf::from("/var/lib/tenement"));
         assert_eq!(config.settings.health_check_interval, 10);
@@ -315,64 +500,64 @@ command = "./api"
     }
 
     #[test]
-    fn test_multiple_processes() {
+    fn test_multiple_services() {
         let config_str = r#"
-[process.api]
+[service.api]
 command = "./api"
 
-[process.worker]
+[service.worker]
 command = "./worker"
 socket = "/tmp/worker-{id}.sock"
 
-[process.scheduler]
+[service.scheduler]
 command = "./scheduler"
 "#;
-        let config: Config = toml::from_str(config_str).unwrap();
+        let config = Config::from_str(config_str).unwrap();
 
-        assert_eq!(config.process.len(), 3);
-        assert!(config.get_process("api").is_some());
-        assert!(config.get_process("worker").is_some());
-        assert!(config.get_process("scheduler").is_some());
-        assert!(config.get_process("nonexistent").is_none());
+        assert_eq!(config.service.len(), 3);
+        assert!(config.get_service("api").is_some());
+        assert!(config.get_service("worker").is_some());
+        assert!(config.get_service("scheduler").is_some());
+        assert!(config.get_service("nonexistent").is_none());
     }
 
     #[test]
-    fn test_process_with_workdir() {
+    fn test_service_with_workdir() {
         let config_str = r#"
-[process.api]
+[service.api]
 command = "./api"
 workdir = "/var/app"
 "#;
-        let config: Config = toml::from_str(config_str).unwrap();
-        let api = config.get_process("api").unwrap();
+        let config = Config::from_str(config_str).unwrap();
+        let api = config.get_service("api").unwrap();
         assert_eq!(api.workdir, Some(PathBuf::from("/var/app")));
     }
 
     #[test]
-    fn test_process_restart_policies() {
+    fn test_service_restart_policies() {
         let config_str = r#"
-[process.always]
+[service.always]
 command = "./always"
 restart = "always"
 
-[process.never]
+[service.never]
 command = "./never"
 restart = "never"
 
-[process.default]
+[service.default]
 command = "./default"
 "#;
-        let config: Config = toml::from_str(config_str).unwrap();
+        let config = Config::from_str(config_str).unwrap();
 
-        assert_eq!(config.get_process("always").unwrap().restart, "always");
-        assert_eq!(config.get_process("never").unwrap().restart, "never");
-        assert_eq!(config.get_process("default").unwrap().restart, "on-failure");
+        assert_eq!(config.get_service("always").unwrap().restart, "always");
+        assert_eq!(config.get_service("never").unwrap().restart, "never");
+        assert_eq!(config.get_service("default").unwrap().restart, "on-failure");
     }
 
     #[test]
     fn test_routing_config() {
         let config_str = r#"
-[process.api]
+[service.api]
 command = "./api"
 
 [routing]
@@ -386,7 +571,7 @@ default = "api"
 "/api" = "api"
 "/health" = "api"
 "#;
-        let config: Config = toml::from_str(config_str).unwrap();
+        let config = Config::from_str(config_str).unwrap();
 
         assert_eq!(config.routing.default, Some("api".to_string()));
         assert_eq!(config.routing.subdomain.len(), 2);
@@ -397,10 +582,10 @@ default = "api"
     #[test]
     fn test_empty_routing() {
         let config_str = r#"
-[process.api]
+[service.api]
 command = "./api"
 "#;
-        let config: Config = toml::from_str(config_str).unwrap();
+        let config = Config::from_str(config_str).unwrap();
 
         assert!(config.routing.default.is_none());
         assert!(config.routing.subdomain.is_empty());
@@ -410,11 +595,11 @@ command = "./api"
     #[test]
     fn test_command_interpolated() {
         let config_str = r#"
-[process.api]
+[service.api]
 command = "./api --id {id} --name {name}"
 "#;
-        let config: Config = toml::from_str(config_str).unwrap();
-        let api = config.get_process("api").unwrap();
+        let config = Config::from_str(config_str).unwrap();
+        let api = config.get_service("api").unwrap();
         let data_dir = PathBuf::from("/data");
 
         let cmd = api.command_interpolated("api", "user123", &data_dir);
@@ -424,12 +609,12 @@ command = "./api --id {id} --name {name}"
     #[test]
     fn test_args_interpolated() {
         let config_str = r#"
-[process.api]
+[service.api]
 command = "./api"
 args = ["--socket", "{socket}", "--data", "{data_dir}/{id}"]
 "#;
-        let config: Config = toml::from_str(config_str).unwrap();
-        let api = config.get_process("api").unwrap();
+        let config = Config::from_str(config_str).unwrap();
+        let api = config.get_service("api").unwrap();
         let data_dir = PathBuf::from("/data");
 
         let args = api.args_interpolated("api", "user123", &data_dir);
@@ -448,14 +633,14 @@ args = ["--socket", "{socket}", "--data", "{data_dir}/{id}"]
         let config_path = dir.path().join("tenement.toml");
 
         let config_content = r#"
-[process.api]
+[service.api]
 command = "./api"
 "#;
         let mut file = std::fs::File::create(&config_path).unwrap();
         file.write_all(config_content.as_bytes()).unwrap();
 
         let config = Config::load_from_path(&config_path).unwrap();
-        assert!(config.get_process("api").is_some());
+        assert!(config.get_service("api").is_some());
     }
 
     #[test]
@@ -490,25 +675,341 @@ command = "./api"
     #[test]
     fn test_config_clone() {
         let config_str = r#"
-[process.api]
+[service.api]
 command = "./api"
 "#;
-        let config: Config = toml::from_str(config_str).unwrap();
+        let config = Config::from_str(config_str).unwrap();
         let cloned = config.clone();
-        assert_eq!(config.process.len(), cloned.process.len());
+        assert_eq!(config.service.len(), cloned.service.len());
     }
 
     #[test]
-    fn test_process_config_clone() {
+    fn test_service_config_clone() {
         let config_str = r#"
-[process.api]
+[service.api]
 command = "./api"
 health = "/health"
 "#;
-        let config: Config = toml::from_str(config_str).unwrap();
-        let api = config.get_process("api").unwrap();
+        let config = Config::from_str(config_str).unwrap();
+        let api = config.get_service("api").unwrap();
         let cloned = api.clone();
         assert_eq!(api.command, cloned.command);
         assert_eq!(api.health, cloned.health);
+    }
+
+    #[test]
+    fn test_firecracker_config_with_isolation() {
+        // Test new 'isolation' field name
+        let config_str = r#"
+[service.secure]
+isolation = "firecracker"
+command = "./worker"
+kernel = "/var/lib/tenement/vmlinux"
+rootfs = "/var/lib/tenement/worker.ext4"
+memory_mb = 512
+vcpus = 2
+vsock_port = 6000
+"#;
+        let config = Config::from_str(config_str).unwrap();
+        let secure = config.get_service("secure").unwrap();
+
+        assert_eq!(secure.isolation, RuntimeType::Firecracker);
+        assert_eq!(secure.kernel, Some(PathBuf::from("/var/lib/tenement/vmlinux")));
+        assert_eq!(secure.rootfs, Some(PathBuf::from("/var/lib/tenement/worker.ext4")));
+        assert_eq!(secure.memory_mb, 512);
+        assert_eq!(secure.vcpus, 2);
+        assert_eq!(secure.vsock_port, 6000);
+
+        // Validation should pass
+        assert!(secure.validate("secure").is_ok());
+    }
+
+    #[test]
+    fn test_firecracker_config_legacy_runtime() {
+        // Test legacy 'runtime' field still works
+        let config_str = r#"
+[process.secure]
+runtime = "firecracker"
+command = "./worker"
+kernel = "/var/lib/tenement/vmlinux"
+rootfs = "/var/lib/tenement/worker.ext4"
+"#;
+        let config = Config::from_str(config_str).unwrap();
+        let secure = config.get_service("secure").unwrap();
+
+        assert_eq!(secure.isolation, RuntimeType::Firecracker);
+    }
+
+    #[test]
+    fn test_firecracker_defaults() {
+        let config_str = r#"
+[service.secure]
+isolation = "firecracker"
+command = "./worker"
+kernel = "/vmlinux"
+rootfs = "/rootfs.ext4"
+"#;
+        let config = Config::from_str(config_str).unwrap();
+        let secure = config.get_service("secure").unwrap();
+
+        assert_eq!(secure.memory_mb, 256);
+        assert_eq!(secure.vcpus, 1);
+        assert_eq!(secure.vsock_port, 5000);
+    }
+
+    #[test]
+    fn test_firecracker_validation_missing_kernel() {
+        let config_str = r#"
+[service.secure]
+isolation = "firecracker"
+command = "./worker"
+rootfs = "/rootfs.ext4"
+"#;
+        let config = Config::from_str(config_str).unwrap();
+        let secure = config.get_service("secure").unwrap();
+
+        let result = secure.validate("secure");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("kernel"));
+    }
+
+    #[test]
+    fn test_firecracker_validation_missing_rootfs() {
+        let config_str = r#"
+[service.secure]
+isolation = "firecracker"
+command = "./worker"
+kernel = "/vmlinux"
+"#;
+        let config = Config::from_str(config_str).unwrap();
+        let secure = config.get_service("secure").unwrap();
+
+        let result = secure.validate("secure");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("rootfs"));
+    }
+
+    #[test]
+    fn test_namespace_isolation_default() {
+        let config_str = r#"
+[service.api]
+command = "./api"
+"#;
+        let config = Config::from_str(config_str).unwrap();
+        let api = config.get_service("api").unwrap();
+
+        // Default isolation is namespace (not process)
+        assert_eq!(api.isolation, RuntimeType::Namespace);
+        assert!(api.validate("api").is_ok());
+    }
+
+    #[test]
+    fn test_explicit_process_isolation() {
+        let config_str = r#"
+[service.api]
+isolation = "process"
+command = "./api"
+"#;
+        let config = Config::from_str(config_str).unwrap();
+        let api = config.get_service("api").unwrap();
+
+        assert_eq!(api.isolation, RuntimeType::Process);
+    }
+
+    #[test]
+    fn test_legacy_runtime_field_works() {
+        // Test that the legacy 'runtime' field still works
+        let config_str = r#"
+[process.api]
+runtime = "process"
+command = "./api"
+"#;
+        let config = Config::from_str(config_str).unwrap();
+        let api = config.get_service("api").unwrap();
+
+        assert_eq!(api.isolation, RuntimeType::Process);
+    }
+
+    #[test]
+    fn test_idle_timeout_config() {
+        let config_str = r#"
+[service.api]
+command = "./api"
+idle_timeout = 300
+"#;
+        let config = Config::from_str(config_str).unwrap();
+        let api = config.get_service("api").unwrap();
+
+        assert_eq!(api.idle_timeout, Some(300));
+    }
+
+    #[test]
+    fn test_idle_timeout_default() {
+        let config_str = r#"
+[service.api]
+command = "./api"
+"#;
+        let config = Config::from_str(config_str).unwrap();
+        let api = config.get_service("api").unwrap();
+
+        assert_eq!(api.idle_timeout, None);
+    }
+
+    #[test]
+    fn test_idle_timeout_zero_means_never() {
+        let config_str = r#"
+[service.api]
+command = "./api"
+idle_timeout = 0
+"#;
+        let config = Config::from_str(config_str).unwrap();
+        let api = config.get_service("api").unwrap();
+
+        // 0 is valid - means never auto-stop (explicitly disabled)
+        assert_eq!(api.idle_timeout, Some(0));
+    }
+
+    #[test]
+    fn test_startup_timeout_config() {
+        let config_str = r#"
+[service.api]
+command = "./api"
+startup_timeout = 30
+"#;
+        let config = Config::from_str(config_str).unwrap();
+        let api = config.get_service("api").unwrap();
+
+        assert_eq!(api.startup_timeout, 30);
+    }
+
+    #[test]
+    fn test_startup_timeout_default() {
+        let config_str = r#"
+[service.api]
+command = "./api"
+"#;
+        let config = Config::from_str(config_str).unwrap();
+        let api = config.get_service("api").unwrap();
+
+        // Default is 10 seconds
+        assert_eq!(api.startup_timeout, 10);
+    }
+
+    #[test]
+    fn test_backoff_settings() {
+        let config_str = r#"
+[settings]
+backoff_base_ms = 2000
+backoff_max_ms = 120000
+
+[service.api]
+command = "./api"
+"#;
+        let config = Config::from_str(config_str).unwrap();
+
+        assert_eq!(config.settings.backoff_base_ms, 2000);
+        assert_eq!(config.settings.backoff_max_ms, 120000);
+    }
+
+    #[test]
+    fn test_backoff_settings_default() {
+        let config_str = r#"
+[service.api]
+command = "./api"
+"#;
+        let config = Config::from_str(config_str).unwrap();
+
+        // Default: 1s base, 60s max
+        assert_eq!(config.settings.backoff_base_ms, 1000);
+        assert_eq!(config.settings.backoff_max_ms, 60000);
+    }
+
+    #[test]
+    fn test_mixed_service_and_process_sections() {
+        // Test that both [service.X] and [process.X] can be used together
+        let config_str = r#"
+[service.api]
+command = "./api"
+
+[process.worker]
+command = "./worker"
+"#;
+        let config = Config::from_str(config_str).unwrap();
+
+        assert_eq!(config.service.len(), 2);
+        assert!(config.get_service("api").is_some());
+        assert!(config.get_service("worker").is_some());
+    }
+
+    #[test]
+    fn test_duplicate_service_process_fails() {
+        // Test that defining the same name in both [service] and [process] fails
+        let config_str = r#"
+[service.api]
+command = "./api"
+
+[process.api]
+command = "./api-other"
+"#;
+        let result = Config::from_str(config_str);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("defined in both"));
+    }
+
+    #[test]
+    fn test_resource_limits_memory() {
+        let config_str = r#"
+[service.api]
+command = "./api"
+memory_limit_mb = 256
+"#;
+        let config = Config::from_str(config_str).unwrap();
+        let api = config.get_service("api").unwrap();
+
+        assert_eq!(api.memory_limit_mb, Some(256));
+        assert_eq!(api.cpu_shares, None);
+    }
+
+    #[test]
+    fn test_resource_limits_cpu() {
+        let config_str = r#"
+[service.api]
+command = "./api"
+cpu_shares = 500
+"#;
+        let config = Config::from_str(config_str).unwrap();
+        let api = config.get_service("api").unwrap();
+
+        assert_eq!(api.memory_limit_mb, None);
+        assert_eq!(api.cpu_shares, Some(500));
+    }
+
+    #[test]
+    fn test_resource_limits_both() {
+        let config_str = r#"
+[service.api]
+command = "./api"
+memory_limit_mb = 512
+cpu_shares = 200
+"#;
+        let config = Config::from_str(config_str).unwrap();
+        let api = config.get_service("api").unwrap();
+
+        assert_eq!(api.memory_limit_mb, Some(512));
+        assert_eq!(api.cpu_shares, Some(200));
+    }
+
+    #[test]
+    fn test_resource_limits_default_none() {
+        let config_str = r#"
+[service.api]
+command = "./api"
+"#;
+        let config = Config::from_str(config_str).unwrap();
+        let api = config.get_service("api").unwrap();
+
+        // Both should default to None (unlimited)
+        assert_eq!(api.memory_limit_mb, None);
+        assert_eq!(api.cpu_shares, None);
     }
 }

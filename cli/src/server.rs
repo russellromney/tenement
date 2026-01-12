@@ -264,38 +264,66 @@ fn parse_subdomain(host: &str, domain: &str) -> Option<(String, String)> {
 }
 
 /// Proxy request to a process instance via unix socket
+///
+/// Implements wake-on-request: if the instance is not running but the process
+/// is configured, it will spawn the instance and wait for it to be ready.
 async fn proxy_to_instance(
     state: &AppState,
     process: &str,
     id: &str,
     _req: Request<Body>,
 ) -> Response {
-    // Look up the instance
-    let instances = state.hypervisor.list().await;
-    let instance_id = format!("{}:{}", process, id);
+    // Check if instance is running
+    let is_running = state.hypervisor.is_running(process, id).await;
 
-    let instance = instances.iter().find(|i| i.id.to_string() == instance_id);
-
-    match instance {
-        Some(inst) => {
-            // TODO: Actually proxy to unix socket
-            // For now, return a placeholder
-            let socket_path = inst.socket.display().to_string();
-            tracing::debug!("Would proxy to socket: {}", socket_path);
-
-            // Placeholder response
-            (
-                StatusCode::BAD_GATEWAY,
-                format!("Proxy to {} not yet implemented", socket_path),
-            )
-                .into_response()
+    let socket_path = if is_running {
+        // Instance is running - touch activity and get socket path
+        state.hypervisor.touch_activity(process, id).await;
+        match state.hypervisor.get(process, id).await {
+            Some(info) => info.socket,
+            None => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Instance disappeared unexpectedly",
+                )
+                    .into_response()
+            }
         }
-        None => (
-            StatusCode::NOT_FOUND,
-            format!("Instance {} not found", instance_id),
-        )
-            .into_response(),
-    }
+    } else {
+        // Instance not running - check if process is configured
+        if !state.hypervisor.has_process(process) {
+            return (
+                StatusCode::NOT_FOUND,
+                format!("Process '{}' not configured", process),
+            )
+                .into_response();
+        }
+
+        // Wake-on-request: spawn and wait for instance to be ready
+        tracing::info!("Waking instance {}:{}", process, id);
+        match state.hypervisor.spawn_and_wait(process, id).await {
+            Ok(socket) => socket,
+            Err(e) => {
+                tracing::error!("Failed to wake instance {}:{}: {}", process, id, e);
+                return (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    format!("Failed to start instance: {}", e),
+                )
+                    .into_response();
+            }
+        }
+    };
+
+    // TODO: Actually proxy to unix socket
+    // For now, return a placeholder
+    tracing::debug!("Would proxy to socket: {}", socket_path.display());
+
+    // Placeholder response
+    (
+        StatusCode::BAD_GATEWAY,
+        format!("Proxy to {} not yet implemented", socket_path.display()),
+    )
+        .into_response()
 }
 
 #[cfg(test)]
@@ -381,14 +409,14 @@ mod tests {
         let app = create_router(state);
         let server = TestServer::new(app).unwrap();
 
-        // Simulate request to subdomain that doesn't match any instance
+        // Simulate request to subdomain for unconfigured process
         let response = server
             .get("/some-path")
             .add_header("Host", "prod.api.example.com")
             .await;
 
         response.assert_status_not_found();
-        response.assert_text_contains("not found");
+        response.assert_text_contains("not configured");
     }
 
     #[tokio::test]

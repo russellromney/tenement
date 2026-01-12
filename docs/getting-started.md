@@ -52,13 +52,14 @@ Create a config file in your project root:
 data_dir = "/var/lib/myapp"
 health_check_interval = 10
 
-[process.api]
+[service.api]
 command = "./my-api"
 socket = "/tmp/api-{id}.sock"
 health = "/health"
 restart = "on-failure"
+isolation = "namespace"      # process, namespace, or sandbox
 
-[process.api.env]
+[service.api.env]
 DATABASE_PATH = "{data_dir}/{id}/app.db"
 LOG_LEVEL = "info"
 ```
@@ -132,7 +133,7 @@ Or integrate the tenement library into your own reverse proxy.
 | `max_restarts` | `3` | Max restarts within window |
 | `restart_window` | `300` | Window in seconds for restart limit |
 
-### Process Config
+### Service Config
 
 | Field | Required | Description |
 |-------|----------|-------------|
@@ -143,6 +144,10 @@ Or integrate the tenement library into your own reverse proxy.
 | `env` | No | Environment variables |
 | `workdir` | No | Working directory |
 | `restart` | No | Policy: `always`, `on-failure`, `never` |
+| `isolation` | No | Isolation: `process`, `namespace` (default), `sandbox` |
+| `idle_timeout` | No | Auto-stop after N seconds idle |
+| `memory_limit_mb` | No | Memory limit in MB (cgroups v2) |
+| `cpu_shares` | No | CPU weight 1-10000 (cgroups v2) |
 
 ### Variable Interpolation
 
@@ -150,7 +155,7 @@ These variables are replaced in `command`, `args`, `socket`, and `env` values:
 
 | Variable | Description |
 |----------|-------------|
-| `{name}` | Process name (from config key) |
+| `{name}` | Service name (from config key) |
 | `{id}` | Instance ID (from spawn command) |
 | `{data_dir}` | Settings data directory |
 | `{socket}` | Computed socket path |
@@ -160,9 +165,11 @@ These variables are replaced in `command`, `args`, `socket`, and `env` values:
 **On spawn:**
 1. Create instance data directory: `{data_dir}/{name}/{id}/`
 2. Remove old socket if exists
-3. Spawn process with interpolated command and env
-4. Wait for socket to appear (up to 500ms)
-5. Track instance in memory
+3. Create cgroup with resource limits (if configured, Linux only)
+4. Spawn process with configured isolation level
+5. Add process to cgroup
+6. Wait for socket to appear (up to `startup_timeout` seconds)
+7. Track instance in memory
 
 **On health check:**
 1. Connect to Unix socket
@@ -173,8 +180,9 @@ These variables are replaced in `command`, `args`, `socket`, and `env` values:
 
 **On stop:**
 1. Send SIGKILL to process
-2. Remove socket file
-3. Remove from tracking
+2. Remove cgroup (if created)
+3. Remove socket file
+4. Remove from tracking
 
 ## Next Steps
 

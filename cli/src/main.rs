@@ -118,12 +118,13 @@ async fn main() -> Result<()> {
             let config = Config::load()?;
             println!("Data dir: {:?}", config.settings.data_dir);
             println!("Health interval: {}s", config.settings.health_check_interval);
-            println!("\nProcesses:");
-            for (name, process) in &config.process {
+            println!("\nServices:");
+            for (name, svc) in &config.service {
                 println!("  [{}]", name);
-                println!("    command: {}", process.command);
-                println!("    socket: {}", process.socket);
-                if let Some(health) = &process.health {
+                println!("    command: {}", svc.command);
+                println!("    socket: {}", svc.socket);
+                println!("    isolation: {}", svc.isolation);
+                if let Some(health) = &svc.health {
                     println!("    health: {}", health);
                 }
             }

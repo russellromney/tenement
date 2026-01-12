@@ -1,7 +1,29 @@
 # Firecracker VM Runtime Implementation Plan
 
-**Status:** Roadmap
+**Status:** Complete (untested on KVM)
 **Target:** tenement 0.2.0
+
+## Implementation Status
+
+| Phase | Status | Description |
+|-------|--------|-------------|
+| Phase 1: Runtime Trait | ✅ Complete | `Runtime` trait, `RuntimeHandle`, `ProcessRuntime` |
+| Phase 2: Config Extensions | ✅ Complete | `runtime`, `kernel`, `rootfs`, `memory_mb`, `vcpus`, `vsock_port` fields |
+| Phase 3: Firecracker Runtime | ✅ Complete | Full VM spawn via HTTP API, lifecycle management |
+| Phase 4: VSOCK Integration | ✅ Complete | Health checks support vsock CONNECT protocol |
+| Phase 5: Documentation | ✅ Complete | This file and README updated |
+
+**What works now:**
+- Config parsing for Firecracker processes
+- Config validation (requires kernel + rootfs)
+- Runtime trait abstraction
+- VSOCK-aware health checks
+- Clear error messages on unsupported platforms
+- **VM spawning via Firecracker REST API**
+- **VM lifecycle management (stop with graceful shutdown)**
+
+**What's TODO:**
+- Integration tests on KVM-enabled systems (code is complete but untested on real hardware)
 
 ## Overview
 

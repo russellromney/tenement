@@ -16,24 +16,33 @@ data_dir = "/var/lib/tenement"
 health_check_interval = 10
 max_restarts = 3
 restart_window = 300
+backoff_base_ms = 1000
+backoff_max_ms = 60000
 
-[process.api]
+[service.api]
 command = "./my-api"
 args = ["--verbose"]
 socket = "/tmp/api-{id}.sock"
 health = "/health"
 restart = "on-failure"
 workdir = "/opt/myapp"
+isolation = "namespace"      # Isolation level
+startup_timeout = 10         # Seconds to wait for socket
+idle_timeout = 300           # Auto-stop after idle (0 = never)
+memory_limit_mb = 256        # Memory limit (cgroups v2)
+cpu_shares = 100             # CPU weight 1-10000 (cgroups v2)
 
-[process.api.env]
+[service.api.env]
 DATABASE_PATH = "{data_dir}/{id}/app.db"
 SOCKET_PATH = "{socket}"
 LOG_LEVEL = "info"
 
-[process.worker]
+[service.worker]
 command = "./worker"
 socket = "/tmp/worker-{id}.sock"
 restart = "always"
+isolation = "sandbox"        # gVisor for untrusted code
+memory_limit_mb = 128
 
 [routing]
 default = "api"
@@ -47,9 +56,11 @@ default = "api"
 "/worker" = "worker"
 ```
 
+> **Note:** Both `[service.X]` (preferred) and `[process.X]` (legacy) section names are supported.
+
 ## Settings
 
-Global settings that apply to all processes.
+Global settings that apply to all services.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
@@ -57,6 +68,8 @@ Global settings that apply to all processes.
 | `health_check_interval` | u64 | `10` | Seconds between health checks |
 | `max_restarts` | u32 | `3` | Maximum restart attempts within window |
 | `restart_window` | u64 | `300` | Window in seconds for restart limit |
+| `backoff_base_ms` | u64 | `1000` | Base delay for exponential backoff (ms) |
+| `backoff_max_ms` | u64 | `60000` | Maximum backoff delay (ms) |
 
 ### Example
 
@@ -66,31 +79,38 @@ data_dir = "/data/myapp"
 health_check_interval = 30
 max_restarts = 5
 restart_window = 600
+backoff_base_ms = 2000
+backoff_max_ms = 120000
 ```
 
-## Process Configuration
+## Service Configuration
 
-Define process templates under `[process.<name>]`.
+Define service templates under `[service.<name>]` (or `[process.<name>]` for legacy support).
 
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `command` | string | **Yes** | Command to run |
-| `args` | array | No | Arguments to pass |
-| `socket` | string | No | Socket path pattern (default: `/tmp/{name}-{id}.sock`) |
-| `health` | string | No | Health check endpoint (e.g., `/health`) |
-| `env` | table | No | Environment variables |
-| `workdir` | path | No | Working directory |
-| `restart` | string | No | Restart policy: `always`, `on-failure`, `never` |
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `command` | string | **Yes** | - | Command to run |
+| `args` | array | No | `[]` | Arguments to pass |
+| `socket` | string | No | `/tmp/{name}-{id}.sock` | Socket path pattern |
+| `health` | string | No | - | Health check endpoint (e.g., `/health`) |
+| `env` | table | No | `{}` | Environment variables |
+| `workdir` | path | No | - | Working directory |
+| `restart` | string | No | `on-failure` | Restart policy: `always`, `on-failure`, `never` |
+| `isolation` | string | No | `namespace` | Isolation level: `process`, `namespace`, `sandbox` |
+| `startup_timeout` | u64 | No | `10` | Seconds to wait for socket creation |
+| `idle_timeout` | u64 | No | - | Auto-stop after N seconds idle (0 = never) |
+| `memory_limit_mb` | u32 | No | - | Memory limit in MB (cgroups v2) |
+| `cpu_shares` | u32 | No | - | CPU weight 1-10000 (cgroups v2, default 100) |
 
 ### Command
 
 The executable to run. Supports variable interpolation.
 
 ```toml
-[process.api]
+[service.api]
 command = "./api-server"
 
-[process.python-app]
+[service.python-app]
 command = "python"
 args = ["-m", "myapp.server"]
 ```
@@ -100,7 +120,7 @@ args = ["-m", "myapp.server"]
 Unix socket path pattern. Defaults to `/tmp/{name}-{id}.sock`.
 
 ```toml
-[process.api]
+[service.api]
 socket = "/var/run/myapp/{name}-{id}.sock"
 ```
 
@@ -116,7 +136,7 @@ Host: localhost
 A `200 OK` response indicates healthy status.
 
 ```toml
-[process.api]
+[service.api]
 health = "/health"
 ```
 
@@ -129,24 +149,93 @@ health = "/health"
 | `never` | Never restart |
 
 ```toml
-[process.api]
+[service.api]
 restart = "always"
 
-[process.oneshot]
+[service.oneshot]
 restart = "never"
 ```
 
-### Environment Variables
+### Isolation Level
 
-Define environment variables in `[process.<name>.env]`:
+Control how services are isolated from each other.
+
+| Level | Tool | Overhead | Startup | Use Case |
+|-------|------|----------|---------|----------|
+| `process` | bare process | ~0 | <10ms | Same trust boundary, debugging |
+| `namespace` | Linux unshare | ~0 | <10ms | **Default** - trusted code, /proc isolated |
+| `sandbox` | gVisor (runsc) | ~20MB | <100ms | Untrusted/multi-tenant code |
 
 ```toml
-[process.api.env]
+# Default: namespace isolation
+[service.api]
+command = "./api"
+# isolation = "namespace" (implicit)
+
+# No isolation (same trust boundary)
+[service.debug]
+command = "./debug"
+isolation = "process"
+
+# gVisor sandbox (syscall filtering)
+[service.untrusted]
+command = "./third-party"
+isolation = "sandbox"
+```
+
+**Notes:**
+- `namespace` requires Linux (fails loudly on other platforms)
+- `sandbox` requires gVisor (runsc) installed and `--features sandbox` compile flag
+
+### Resource Limits
+
+Apply memory and CPU limits via cgroups v2 (Linux only).
+
+```toml
+[service.api]
+command = "./api"
+memory_limit_mb = 256    # Hard memory limit in MB
+cpu_shares = 500         # CPU weight (1-10000, default 100)
+```
+
+| Field | Range | Description |
+|-------|-------|-------------|
+| `memory_limit_mb` | 1+ | Hard memory limit. Process killed if exceeded. |
+| `cpu_shares` | 1-10000 | Relative CPU priority. 100 = normal, higher = more CPU time. |
+
+Resource limits work with all isolation levels (process, namespace, sandbox).
+
+**Notes:**
+- Requires Linux with cgroups v2 enabled (kernel 4.5+)
+- On non-Linux, resource limits are silently ignored
+- Cgroup created at `/sys/fs/cgroup/tenement/{instance_id}/`
+
+### Environment Variables
+
+Define environment variables in `[service.<name>.env]`:
+
+```toml
+[service.api.env]
 DATABASE_PATH = "{data_dir}/{id}/app.db"
 SOCKET_PATH = "{socket}"
 LOG_LEVEL = "info"
 API_KEY = "secret"
 ```
+
+### Hibernation
+
+Auto-stop idle instances to save resources. They wake automatically on first request.
+
+```toml
+[service.api]
+command = "./api"
+idle_timeout = 300       # Stop after 5 minutes idle
+startup_timeout = 10     # Max 10 seconds to create socket on wake
+```
+
+- `idle_timeout = 0` means never auto-stop
+- Health checks do NOT count as activity
+- Only real requests reset the idle timer
 
 ## Variable Interpolation
 
@@ -162,11 +251,11 @@ These variables are replaced in `command`, `args`, `socket`, and `env` values:
 ### Example
 
 ```toml
-[process.api]
+[service.api]
 command = "./api"
 socket = "/tmp/{name}-{id}.sock"
 
-[process.api.env]
+[service.api.env]
 DB = "{data_dir}/{name}/{id}/app.db"
 SOCK = "{socket}"
 ```
@@ -237,12 +326,14 @@ Example with defaults:
 The simplest possible config:
 
 ```toml
-[process.myapp]
+[service.myapp]
 command = "./myapp"
 ```
 
 This uses all defaults:
 - Socket: `/tmp/myapp-{id}.sock`
 - Data dir: `/var/lib/tenement`
+- Isolation: `namespace`
 - Health check: disabled
 - Restart: `on-failure`
+- Resource limits: unlimited
