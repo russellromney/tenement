@@ -305,7 +305,11 @@ Comprehensive E2E testing foundation.
 - [x] **Session 4: E2E Lifecycle Tests (12 tests)**
   - `tenement/tests/e2e_lifecycle.rs` - Complete instance lifecycle tests
   - Spawn to stop, health checks, idle timeout, wake-on-request, restart behavior
-- [ ] Session 5: Cgroup Lifecycle Tests (6 tests, Linux only)
+- [x] **Session 5: Cgroup Lifecycle Tests (14 tests, Linux only)**
+  - `tenement/tests/cgroup_lifecycle.rs` - Cgroup v2 resource limit tests
+  - Cgroup creation/cleanup on spawn/stop, memory.max and cpu.weight enforcement
+  - CPU weight clamping (min/max), process membership, multiple instances
+  - Graceful skip on non-Linux platforms, restart preserves limits
 - [x] **Session 6: Stress Tests (7 tests)**
   - `tenement/tests/stress_concurrent.rs` - Concurrent load testing
   - 100 concurrent spawns, spawn/stop cycles, log buffer stress, health check scaling
@@ -316,7 +320,7 @@ Comprehensive E2E testing foundation.
   - `slum/tests/integration.rs` - Fleet orchestration integration tests
   - Server health/status, tenant routing, multi-tenant scenarios, migration, offline handling
 
-**Total: 101 tests + 8 benchmarks** (38 auth + 10 hypervisor + 12 lifecycle + 6 cgroup + 7 stress + 20 slum)
+**Total: 109 tests + 8 benchmarks** (38 auth + 10 hypervisor + 12 lifecycle + 14 cgroup + 7 stress + 20 slum)
 
 ### Phase 8.7: Code Quality Fixes - DONE
 
