@@ -3,6 +3,7 @@ import starlight from '@astrojs/starlight';
 
 export default defineConfig({
   site: 'https://tenement.dev',
+  output: 'static',
   integrations: [
     starlight({
       title: 'tenement',

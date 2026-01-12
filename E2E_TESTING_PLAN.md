@@ -628,15 +628,15 @@ jobs:
 
 ## Summary
 
-| Session | Focus | Tests | Prerequisite |
-|---------|-------|-------|--------------|
-| 1 | Infrastructure | Setup | None |
-| 2 | Auth Integration | 10 | Auth middleware (FIX_PLAN) |
-| 3 | Hypervisor Integration | 7 | Session 1 |
-| 4 | E2E Lifecycle | 9 | Session 1 |
-| 5 | Cgroup Lifecycle | 6 | Session 1, Linux |
-| 6 | Stress Tests | 6 | Session 1 |
-| 7 | Benchmarks | 8 | Session 1 |
-| 8 | Slum Integration | 5 | Session 1 |
+| Session | Focus | Tests | Status |
+|---------|-------|-------|--------|
+| 1 | Infrastructure | Setup | Complete |
+| 2 | Auth Integration | 38 | Complete |
+| 3 | Hypervisor Integration | 7 | Pending |
+| 4 | E2E Lifecycle | 9 | Complete |
+| 5 | Cgroup Lifecycle | 6 | Pending (Linux) |
+| 6 | Stress Tests | 6 | Pending |
+| 7 | Benchmarks | 8 | Pending |
+| 8 | Slum Integration | 5 | Pending |
 
-**Total: 51 new tests + 8 benchmarks**
+**Total: 79 tests + 8 benchmarks** (38 auth + 7 hypervisor + 9 lifecycle + 6 cgroup + 6 stress + 5 slum + 8 benchmarks)
