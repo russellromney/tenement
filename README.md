@@ -237,18 +237,19 @@ See [ROADMAP.md](ROADMAP.md) for the full isolation spectrum vision.
 - Namespace isolation - Zero-overhead `/proc` protection (Linux)
 - Sandbox isolation (gVisor) - Syscall filtering for untrusted code
 - Resource limits - Memory and CPU limits via cgroups v2
-- Comprehensive test suite (256 tests, 97% increase)
+- Comprehensive test suite (259+ tests)
 - Unix socket proxy - Full request routing to backends
 - Auth middleware - Bearer token authentication on API endpoints
 - Foreign key enforcement in slum fleet orchestration
+- E2E test infrastructure (Session 1) - shared utilities and fixture scripts
+- Race condition fix - Atomic get-and-touch for proxy requests
+- Improved logging - Cgroup cleanup, auth failures, CPU weight clamping
+- Dashboard caching - Cache-Control headers for static assets
 
 **Next up:**
 - E2E integration tests Sessions 2-8 (see E2E_TESTING_PLAN.md)
 - WASM runtime (wasmtime) - Lightweight compute sandbox
 - Storage quotas per instance
-
-**In Progress:**
-- E2E test infrastructure complete (Session 1) - shared utilities and fixture scripts
 
 ## License
 

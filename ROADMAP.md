@@ -304,6 +304,25 @@ Comprehensive E2E testing foundation.
 
 **Total planned: 51 new tests + 8 benchmarks**
 
+### Phase 8.7: Code Quality Fixes - DONE
+
+Bug fixes and improved observability from FIX_PLAN.md.
+
+- [x] **P1-4: Race condition fix** - Atomic `get_and_touch()` for proxy requests
+  - Prevents instance from being reaped between checking if running and touching activity
+  - Single write lock instead of separate is_running + touch_activity + get calls
+- [x] **P1-6: Cgroup warning order** - Check availability before limits
+- [x] **P2-8: Cgroup cleanup logging** - Warn on PID migration and rmdir failures
+- [x] **P3-11: Dashboard caching** - Cache-Control headers (24h for static, must-revalidate for HTML)
+- [x] **P3-12: Auth verification logging** - Debug log for invalid password hash format
+- [x] **P3-13: CPU weight clamping logging** - Info log when weight clamped to 1-10000
+- [x] **P3-14: Idle timeout documentation** - Document that 0 means "never stop"
+
+**Remaining (deferred - code aesthetics, not functional):**
+- P2-7: QueryBuilder refactor (verbose but works)
+- P2-9: TokenStore lifetime (intentional borrow semantics)
+- P2-10: Slum route JOIN (N+1 fine for SQLite local queries)
+
 ### Phase 9: Slum - Multi-Provider Orchestration (v0.9)
 
 Fleet orchestration across multiple tenements on different providers.
