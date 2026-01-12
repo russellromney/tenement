@@ -281,12 +281,12 @@ Core fixes for production readiness.
 - [x] **Foreign key enforcement** - `PRAGMA foreign_keys = ON` in slum DB
 
 **CLI tests:** 18 passing (including auth tests)
-**Slum tests:** 9 passing (including FK constraint test)
+**Slum tests:** 29 passing (9 unit + 20 integration, including FK constraint tests)
 
 See [FIX_PLAN.md](FIX_PLAN.md) for remaining P1/P2 improvements.
 See [E2E_TESTING_PLAN.md](E2E_TESTING_PLAN.md) for comprehensive E2E test plan.
 
-### Phase 8.6: E2E Test Infrastructure - MOSTLY COMPLETE
+### Phase 8.6: E2E Test Infrastructure - COMPLETE
 
 Comprehensive E2E testing foundation.
 
@@ -312,9 +312,11 @@ Comprehensive E2E testing foundation.
 - [x] **Session 7: Performance Benchmarks (8 benchmarks)**
   - `tenement/benches/performance.rs` - Criterion benchmarks
   - All targets met: log_buffer_push (>3M/sec), query (<1ms), fts_search (<50ms), metrics (<1ms)
-- [ ] Session 8: Slum Integration Tests (5 tests)
+- [x] **Session 8: Slum Integration Tests (20 tests)**
+  - `slum/tests/integration.rs` - Fleet orchestration integration tests
+  - Server health/status, tenant routing, multi-tenant scenarios, migration, offline handling
 
-**Total: 86 tests + 8 benchmarks** (38 auth + 10 hypervisor + 12 lifecycle + 6 cgroup + 7 stress + 5 slum)
+**Total: 101 tests + 8 benchmarks** (38 auth + 10 hypervisor + 12 lifecycle + 6 cgroup + 7 stress + 20 slum)
 
 ### Phase 8.7: Code Quality Fixes - DONE
 

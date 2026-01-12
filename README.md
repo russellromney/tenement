@@ -205,11 +205,11 @@ Resource limits work with all isolation levels (process, namespace, sandbox).
 
 ### Testing
 
-320+ tests + 8 benchmarks covering all core modules:
+340+ tests + 8 benchmarks covering all core modules:
 
 ```bash
 cd tenement && cargo test
-# test result: ok. 320+ passed
+# test result: ok. 340+ passed
 
 cargo bench --bench performance
 # 8 benchmarks, all passing targets
@@ -232,6 +232,7 @@ Tests use real processes (`sleep`, `echo`, `env`) and TempDir for file operation
 | Hypervisor Integration | 10 |
 | E2E Lifecycle | 12 |
 | Stress Tests | 7 |
+| Slum Integration | 20 |
 | Benchmarks | 8 |
 
 See [TEST_PLAN.md](TEST_PLAN.md) for unit test breakdown.
@@ -247,7 +248,7 @@ See [ROADMAP.md](ROADMAP.md) for the full isolation spectrum vision.
 - Namespace isolation - Zero-overhead `/proc` protection (Linux)
 - Sandbox isolation (gVisor) - Syscall filtering for untrusted code
 - Resource limits - Memory and CPU limits via cgroups v2
-- Comprehensive test suite (320+ tests + 8 benchmarks)
+- Comprehensive test suite (340+ tests + 8 benchmarks)
 - Unix socket proxy - Full request routing to backends
 - Auth middleware - Bearer token authentication on API endpoints
 - Foreign key enforcement in slum fleet orchestration
@@ -257,15 +258,15 @@ See [ROADMAP.md](ROADMAP.md) for the full isolation spectrum vision.
 - E2E lifecycle tests (Session 4) - 12 tests for instance lifecycle
 - Stress tests (Session 6) - 7 concurrent load tests
 - Performance benchmarks (Session 7) - 8 criterion benchmarks, all passing targets
+- Slum integration tests (Session 8) - 20 fleet orchestration tests
 - Race condition fix - Atomic get-and-touch for proxy requests
 - Improved logging - Cgroup cleanup, auth failures, CPU weight clamping
 - Dashboard caching - Cache-Control headers for static assets
 
 **Next up:**
 - Cgroup lifecycle tests (Session 5) - Linux-only cgroup verification
-- Slum integration tests (Session 8) - Fleet orchestration tests
-- WASM runtime (wasmtime) - Lightweight compute sandbox
 - Storage quotas per instance
+- WASM runtime (wasmtime) - Lightweight compute sandbox
 
 ## License
 

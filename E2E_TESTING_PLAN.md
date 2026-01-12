@@ -592,9 +592,23 @@ criterion_main!(benches);
 
 ### 8.2 Tasks
 
-- [ ] Create `slum/tests/integration.rs`
-- [ ] Implement all 5 tests
-- [ ] Test with mock HTTP servers
+- [x] Create `slum/tests/integration.rs`
+- [x] Implement all 5 core tests + 15 additional tests (20 total)
+- [x] Test with mock HTTP servers (using axum-test)
+
+### 8.3 Test Summary
+
+Implemented 20 integration tests covering:
+
+| Category | Tests | Description |
+|----------|-------|-------------|
+| Server Health | 3 | Status updates, transitions, not found |
+| Tenant Routing | 3 | Domain routing, unknown domain, domain lookup |
+| Multiple Tenants | 3 | Same server, different servers, domain uniqueness |
+| Tenant Migration | 2 | Migration flow, FK constraint validation |
+| Server Offline | 3 | Offline routing, status filtering, FK cascade |
+| Full Lifecycle | 4 | Server CRUD, tenant CRUD, health, metrics, logs |
+| **Total** | **20** | |
 
 ---
 
@@ -649,6 +663,6 @@ jobs:
 | 5 | Cgroup Lifecycle | 6 | Pending (Linux) |
 | 6 | Stress Tests | 7 | Complete |
 | 7 | Benchmarks | 8 | Complete |
-| 8 | Slum Integration | 5 | Pending |
+| 8 | Slum Integration | 20 | Complete |
 
-**Total: 86 tests + 8 benchmarks** (38 auth + 10 hypervisor + 12 lifecycle + 6 cgroup + 7 stress + 5 slum + 8 benchmarks)
+**Total: 101 tests + 8 benchmarks** (38 auth + 10 hypervisor + 12 lifecycle + 6 cgroup + 7 stress + 20 slum + 8 benchmarks)
