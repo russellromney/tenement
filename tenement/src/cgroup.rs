@@ -215,18 +215,30 @@ impl CgroupManager {
                     for line in contents.lines() {
                         if let Ok(pid) = line.trim().parse::<u32>() {
                             // Move to parent (or init cgroup)
-                            std::fs::write(&parent_procs, pid.to_string()).ok();
+                            if let Err(e) = std::fs::write(&parent_procs, pid.to_string()) {
+                                // Process may have already exited, log but continue
+                                tracing::warn!(
+                                    "Failed to move PID {} to parent cgroup for {}: {}",
+                                    pid,
+                                    instance_id,
+                                    e
+                                );
+                            }
                         }
                     }
                 }
             }
 
             // Now remove the cgroup directory
-            std::fs::remove_dir(&cgroup_path).with_context(|| {
-                format!("Failed to remove cgroup: {}", cgroup_path.display())
-            })?;
-
-            tracing::debug!("Removed cgroup for {}", instance_id);
+            if let Err(e) = std::fs::remove_dir(&cgroup_path) {
+                tracing::warn!(
+                    "Failed to remove cgroup directory for {}: {}",
+                    instance_id,
+                    e
+                );
+            } else {
+                tracing::debug!("Removed cgroup for {}", instance_id);
+            }
         }
         Ok(())
     }

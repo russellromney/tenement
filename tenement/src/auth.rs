@@ -34,7 +34,10 @@ pub fn hash_token(token: &str) -> Result<String> {
 pub fn verify_token(token: &str, hash: &str) -> bool {
     let parsed_hash = match PasswordHash::new(hash) {
         Ok(h) => h,
-        Err(_) => return false,
+        Err(e) => {
+            tracing::debug!("Invalid password hash format: {}", e);
+            return false;
+        }
     };
     Argon2::default()
         .verify_password(token.as_bytes(), &parsed_hash)

@@ -387,8 +387,8 @@ pub fn remove(name: &str) -> Result<()> {
 ```
 
 **Tasks:**
-- [ ] Add logging for PID migration failures
-- [ ] Add logging for rmdir failures
+- [x] Add logging for PID migration failures
+- [x] Add logging for rmdir failures
 
 ---
 
@@ -513,7 +513,7 @@ pub fn verify_token(token: &str, hash: &str) -> bool {
 ```
 
 **Tasks:**
-- [ ] Add debug logging for parse failures
+- [x] Add debug logging for parse failures
 
 ---
 
