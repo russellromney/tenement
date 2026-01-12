@@ -294,7 +294,11 @@ Comprehensive E2E testing foundation.
   - `tenement/tests/common/mod.rs` - Config builders, socket waiters, DB helpers
   - `tenement/tests/fixtures/` - mock_server.sh, slow_startup.sh, crash_on_health.sh, exit_immediately.sh
   - 9 verification tests passing
-- [ ] Session 2: Auth Integration Tests (10 tests)
+- [x] **Session 2: Auth Integration Tests (38 tests)** - Comprehensive auth coverage
+  - `cli/tests/auth_integration.rs` - Full auth middleware testing
+  - Core API auth, public endpoints, token formats, wrong schemes, malformed headers
+  - Token rotation, subdomain bypass, edge cases, load testing
+  - Added `cli/src/lib.rs` to expose server module for integration tests
 - [ ] Session 3: Hypervisor Integration Tests (7 tests)
 - [ ] Session 4: E2E Lifecycle Tests (9 tests)
 - [ ] Session 5: Cgroup Lifecycle Tests (6 tests, Linux only)
@@ -302,7 +306,7 @@ Comprehensive E2E testing foundation.
 - [ ] Session 7: Performance Benchmarks (8 benchmarks)
 - [ ] Session 8: Slum Integration Tests (5 tests)
 
-**Total planned: 51 new tests + 8 benchmarks**
+**Total planned: 79 tests + 8 benchmarks** (38 auth + 7 hypervisor + 9 lifecycle + 6 cgroup + 6 stress + 5 slum)
 
 ### Phase 8.7: Code Quality Fixes - DONE
 
