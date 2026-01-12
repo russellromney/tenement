@@ -238,11 +238,14 @@ See [ROADMAP.md](ROADMAP.md) for the full isolation spectrum vision.
 - Sandbox isolation (gVisor) - Syscall filtering for untrusted code
 - Resource limits - Memory and CPU limits via cgroups v2
 - Comprehensive test suite (256 tests, 97% increase)
+- Unix socket proxy - Full request routing to backends
+- Auth middleware - Bearer token authentication on API endpoints
+- Foreign key enforcement in slum fleet orchestration
 
 **Next up:**
+- E2E integration tests (see E2E_TESTING_PLAN.md)
 - WASM runtime (wasmtime) - Lightweight compute sandbox
 - Storage quotas per instance
-- Network bandwidth limits
 
 ## License
 

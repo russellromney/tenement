@@ -270,6 +270,22 @@ Test coverage expansion from 130 to 256 tests (+97%).
 
 See [TEST_PLAN.md](TEST_PLAN.md) for full breakdown.
 
+### Phase 8.5: Critical Infrastructure (v0.8.5) - DONE
+
+Core fixes for production readiness.
+
+- [x] **Unix socket proxy** - Actual request routing to backend processes via `hyperlocal`
+- [x] **Auth middleware** - Bearer token authentication wired to API endpoints
+  - Protected: `/api/instances`, `/api/logs`, `/api/logs/stream`
+  - Public: `/health`, `/metrics`, `/`, `/assets/*`, subdomain routes
+- [x] **Foreign key enforcement** - `PRAGMA foreign_keys = ON` in slum DB
+
+**CLI tests:** 18 passing (including auth tests)
+**Slum tests:** 9 passing (including FK constraint test)
+
+See [FIX_PLAN.md](FIX_PLAN.md) for remaining P1/P2 improvements.
+See [E2E_TESTING_PLAN.md](E2E_TESTING_PLAN.md) for comprehensive E2E test plan.
+
 ### Phase 9: Slum - Multi-Provider Orchestration (v0.9)
 
 Fleet orchestration across multiple tenements on different providers.
