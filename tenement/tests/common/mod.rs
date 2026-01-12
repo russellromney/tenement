@@ -18,7 +18,8 @@ pub fn test_config_with_process(name: &str, command: &str, args: Vec<&str>) -> C
     let process = ProcessConfig {
         command: command.to_string(),
         args: args.into_iter().map(|s| s.to_string()).collect(),
-        socket: "/tmp/tenement-test/{name}-{id}.sock".to_string(),
+        // Use /tmp directly since it always exists
+        socket: "/tmp/{name}-{id}.sock".to_string(),
         isolation: RuntimeType::Process,
         health: None,
         env: HashMap::new(),
@@ -131,4 +132,24 @@ pub fn socket_env(socket_path: &Path) -> HashMap<String, String> {
         socket_path.to_string_lossy().to_string(),
     );
     env
+}
+
+/// Create a simple script that touches the socket file and sleeps
+/// This is more reliable than mock_server.sh for tests that just need
+/// to verify socket creation, not actual HTTP functionality.
+pub fn create_touch_socket_script(dir: &TempDir) -> PathBuf {
+    let script_path = dir.path().join("touch_socket.sh");
+    let script = r#"#!/bin/bash
+SOCKET_PATH="${SOCKET_PATH:-/tmp/test.sock}"
+rm -f "$SOCKET_PATH"
+touch "$SOCKET_PATH"
+sleep 30
+"#;
+    std::fs::write(&script_path, script).expect("Failed to write touch_socket script");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&script_path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    script_path
 }

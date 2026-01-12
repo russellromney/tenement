@@ -3,8 +3,7 @@ use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 use tenement::{init_db, Config, ConfigStore, Hypervisor, TokenStore};
 
-mod dashboard;
-mod server;
+use tenement_cli::server;
 
 #[derive(Parser)]
 #[command(name = "tenement")]

@@ -7,6 +7,10 @@ repository.workspace = true
 homepage.workspace = true
 description = "CLI for tenement - hyperlightweight process hypervisor"
 
+[lib]
+name = "tenement_cli"
+path = "src/lib.rs"
+
 [[bin]]
 name = "ten"
 path = "src/main.rs"

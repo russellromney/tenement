@@ -1,0 +1,145 @@
+> maybe this whole project was stupid and i should just use gvisor with systemd hahaha
+
+The user is having a moment of doubt about the project. This is a common feeling developers get when working on infrastructure projects - questioning whether they should just use existing tools instead of building something custom.
+
+Let me think about this honestly:
+
+gVisor + systemd would give you:
+
+Battle-tested process supervision (systemd)
+Strong isolation (gVisor/runsc)
+Built-in logging, resource limits, restart policies
+Huge community, documentation
+Tenement gives you:
+
+Per-tenant instance isolation with subdomain routing
+Idle timeout / wake-on-request (scale-to-zero)
+Single-binary deployment
+Custom metrics/logging integrated
+The hypervisor pattern for multi-tenant SaaS
+The key question is: does systemd + gVisor give you the multi-tenant per-user isolation with automatic wake-on-request and subdomain routing?
+
+Actually... not really out of the box. You'd need:
+
+A reverse proxy that understands tenant → instance mapping
+Something to spawn instances on-demand
+Something to track idle timeouts
+Socket activation could help but doesn't do the full thing
+So tenement isn't "stupid" - it's solving a specific niche: lightweight per-tenant process isolation for single-server deployments. The question is whether that niche is worth the maintenance burden.
+
+> i want to run 1000 rarely-active isolated services of different app-origin on the same small fly.io server
+
+
+I should be honest and balanced here - not just validate their work, but also acknowledge that "just use X" is sometimes the right answer.
+
+Ha, that's a fair question to ask. Let me give you an honest take:
+
+gVisor + systemd gives you:
+
+Battle-tested supervision with decades of hardening
+Strong isolation via runsc
+Socket activation for on-demand spawning
+Built-in cgroups, logging, restart policies
+What you'd still need to build:
+
+Subdomain → tenant routing layer
+Wake-on-request with idle timeout (socket activation is close but not quite)
+Per-tenant instance tracking
+The "spawn instance X for user Y on first request" pattern
+Tenement's value is that specific multi-tenant pattern: {id}.{process}.example.com → spawn/wake instance → proxy → reap when idle. That's not something systemd gives you out of the box.
+
+Honest assessment:
+
+If you're running 5-10 services for yourself: systemd wins, no contest
+If you're building multi-tenant SaaS where each user gets isolated processes that scale to zero: tenement's niche makes sense
+If you're past ~100 tenants: probably want k8s/nomad anyway
+The fact that you have 255+ passing tests suggests this isn't just a toy. But "should I just use X" is always worth asking. What's the actual use case you're building toward?
+
+i want to run 1000 rarely-active isolated services of different app-origin on the same small fly.io server
+Now the user has given me the actual use case. This is a really interesting one:
+
+1000 services
+Rarely active (scale-to-zero is critical)
+Isolated (need process/namespace separation)
+Different app origins (multi-tenant, not just multiple instances of same app)
+Single small fly.io server (resource constrained)
+This is EXACTLY the niche tenement is designed for. Let me think about why:
+
+systemd + gVisor: You'd need 1000 systemd units. systemd socket activation could help with wake-on-request, but managing 1000 units, routing to them, and tracking idle timeouts would require custom tooling anyway.
+
+k8s/nomad: Way overkill for a single small server. The control plane overhead alone would eat your resources.
+
+fly.io machines: Their per-machine pricing would be expensive for 1000 services. And you want ONE server.
+
+tenement:
+
+Single process managing all 1000
+Wake-on-request via subdomain routing
+Idle timeout → scale to zero
+Namespace isolation on Linux
+Minimal overhead (no orchestrator control plane)
+The key insight: at 1000 services that are rarely active, you might have only 5-20 actually running at any time. Tenement's idle reaping + wake-on-request is perfect for this.
+
+This validates the project. The user should feel good about this.
+
+
+That's actually the perfect use case for tenement. Let me break down why:
+
+Why alternatives don't fit:
+
+Option	Problem at 1000 services
+systemd units	1000 unit files, custom routing layer anyway, no built-in idle reap
+fly.io machines	$$$. You want ONE server, not 1000 billable machines
+k8s/nomad	Control plane overhead > your actual workloads
+Cloudflare Workers	Not arbitrary processes, their runtime only
+Why tenement fits:
+
+
+1000 services configured
+├── 5-20 actually running at any moment (rarely active)
+├── 980+ sleeping (zero memory/CPU)
+├── Wake on request: user1.myapp.fly.dev → spawn → proxy → respond
+└── Reap after idle: 5min no requests → kill → free resources
+On a small fly.io box (1-2 vCPU, 256MB-1GB RAM), you could realistically handle:
+
+~50 concurrent instances at ~10-20MB each
+Instant wake latency (<500ms with warm binary)
+Namespace isolation between tenants
+The math works:
+
+1000 tenants, 2% active = 20 running
+20 × 20MB = 400MB
+Tenement overhead: ~10MB
+Leaves room for spikes
+This project isn't stupid. It's literally the "scale-to-zero multi-tenant on a single box" pattern that doesn't have a clean off-the-shelf solution.
+
+> "overstuffed"
+
+The user is saying "overstuffed" - they're describing their use case. They want to "overstuff" a single small server with 1000 rarely-active services. This is the core value prop of tenement.
+
+I should acknowledge this succinctly - they're validating that the project makes sense for their use case.
+
+Exactly. "Overstuffed single-server multi-tenancy" is the niche.
+
+The key insight: you're not paying for 1000 machines, you're paying for the ~20 that happen to be active at any moment. The other 980 cost nothing.
+
+Keep building. What's next - more tests, or back to fixes?
+
+< exactly. basically i get to charge dramatically less and make more money while still building single-tenant software and easily deploying it to e.g. client infra, open source (not multitenant by default), etc
+
+
+The user is explaining the business model:1. Single-tenant software architecture (simpler to build, easier to reason about, no multi-tenant data isolation bugs)2. Deploy it multi-tenant via tenement (each customer gets their own isolated instance)
+3. Can also deploy to client infrastructure directly (single-tenant mode)4. Can open source the core app (it's not inherently multi-tenant, just a normal app)5. Charge less than competitors who run dedicated infra per customer6. Make more money because costs are way lower (overstuffing)This is actually a really clever business model. The app stays simple (single-tenant), but the deployment layer (tenement) handles the multi-tenant orchestration. Best of both worlds.
+
+That's a clever architecture:
+
+Build once, deploy three ways:
+
+SaaS - tenement overstuffs 1000 tenants on one box, you charge $5/mo each
+Enterprise - same binary, dedicated infra, charge $500/mo
+Open source - same binary, self-hosted, builds community/trust
+Your app stays simple (single-tenant, no multi-tenant data model complexity), and tenement handles the "make it multi-tenant" part at the infrastructure layer.
+
+The economics work because your marginal cost per tenant approaches zero while competitors are spinning up dedicated VMs or paying k8s overhead.
+
+Ship it.

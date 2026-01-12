@@ -266,10 +266,25 @@ async fn test_api_instances_with_valid_token() {
 
 ### 2.3 Tasks
 
-- [ ] Wire auth middleware to server (FIX_PLAN prerequisite)
-- [ ] Create `cli/tests/auth_integration.rs`
-- [ ] Implement all 10 auth tests
-- [ ] Verify tests pass with middleware
+- [x] Wire auth middleware to server (FIX_PLAN prerequisite)
+- [x] Create `cli/tests/auth_integration.rs`
+- [x] Implement all 10 core auth tests
+- [x] Verify tests pass with middleware
+- [x] Add lib.rs to CLI package to expose server module for integration tests
+- [x] Expand to 38 comprehensive auth tests covering:
+  - Core API endpoint auth (6 tests)
+  - Public endpoint access (5 tests)
+  - Bearer token format (2 tests)
+  - Wrong auth scheme rejection (3 tests)
+  - Malformed header handling (3 tests)
+  - Token rotation/replacement (3 tests)
+  - Subdomain routing bypass (3 tests)
+  - All protected endpoints (2 tests)
+  - Edge case tokens (4 tests)
+  - Rapid/load testing (4 tests)
+  - Static assets (1 test)
+  - Special characters (1 test)
+  - Query param rejection (1 test)
 
 ---
 
@@ -381,10 +396,12 @@ async fn test_idle_timeout_triggers_reap() {
 
 ### 4.3 Tasks
 
-- [ ] Create `tenement/tests/e2e/` directory
-- [ ] Create `tenement/tests/e2e/lifecycle.rs`
-- [ ] Implement all 9 lifecycle tests
-- [ ] Add `mod e2e;` to tests module
+- [x] Create `tenement/tests/e2e/` directory
+- [x] Create `tenement/tests/e2e_lifecycle.rs` (9 planned + 3 additional tests)
+- [x] Implement all 9 lifecycle tests
+- [x] Add helper `create_touch_socket_script()` to common/mod.rs
+
+**Note:** Tests implemented in `e2e_lifecycle.rs` (flat file structure, not nested module).
 
 ---
 
