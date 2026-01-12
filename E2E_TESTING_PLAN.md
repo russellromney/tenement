@@ -180,12 +180,12 @@ exit 1
 
 ### 1.3 Tasks
 
-- [ ] Create `tenement/tests/common/mod.rs`
-- [ ] Create `tenement/tests/fixtures/` directory
-- [ ] Create all fixture scripts
-- [ ] Make fixture scripts executable
-- [ ] Add `tenement/tests/common.rs` to re-export common module
-- [ ] Verify fixtures work standalone
+- [x] Create `tenement/tests/common/mod.rs`
+- [x] Create `tenement/tests/fixtures/` directory
+- [x] Create all fixture scripts (mock_server.sh, slow_startup.sh, crash_on_health.sh, exit_immediately.sh)
+- [x] Make fixture scripts executable
+- [x] Create `tenement/tests/test_utils_verify.rs` with 9 verification tests
+- [x] Verify fixtures work standalone
 
 ---
 

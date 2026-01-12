@@ -286,6 +286,24 @@ Core fixes for production readiness.
 See [FIX_PLAN.md](FIX_PLAN.md) for remaining P1/P2 improvements.
 See [E2E_TESTING_PLAN.md](E2E_TESTING_PLAN.md) for comprehensive E2E test plan.
 
+### Phase 8.6: E2E Test Infrastructure - IN PROGRESS
+
+Comprehensive E2E testing foundation.
+
+- [x] **Session 1: Test Infrastructure** - Shared utilities and fixtures
+  - `tenement/tests/common/mod.rs` - Config builders, socket waiters, DB helpers
+  - `tenement/tests/fixtures/` - mock_server.sh, slow_startup.sh, crash_on_health.sh, exit_immediately.sh
+  - 9 verification tests passing
+- [ ] Session 2: Auth Integration Tests (10 tests)
+- [ ] Session 3: Hypervisor Integration Tests (7 tests)
+- [ ] Session 4: E2E Lifecycle Tests (9 tests)
+- [ ] Session 5: Cgroup Lifecycle Tests (6 tests, Linux only)
+- [ ] Session 6: Stress Tests (6 tests)
+- [ ] Session 7: Performance Benchmarks (8 benchmarks)
+- [ ] Session 8: Slum Integration Tests (5 tests)
+
+**Total planned: 51 new tests + 8 benchmarks**
+
 ### Phase 9: Slum - Multi-Provider Orchestration (v0.9)
 
 Fleet orchestration across multiple tenements on different providers.

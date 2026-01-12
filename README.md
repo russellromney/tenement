@@ -243,9 +243,12 @@ See [ROADMAP.md](ROADMAP.md) for the full isolation spectrum vision.
 - Foreign key enforcement in slum fleet orchestration
 
 **Next up:**
-- E2E integration tests (see E2E_TESTING_PLAN.md)
+- E2E integration tests Sessions 2-8 (see E2E_TESTING_PLAN.md)
 - WASM runtime (wasmtime) - Lightweight compute sandbox
 - Storage quotas per instance
+
+**In Progress:**
+- E2E test infrastructure complete (Session 1) - shared utilities and fixture scripts
 
 ## License
 
