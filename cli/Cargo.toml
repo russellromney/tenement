@@ -36,6 +36,9 @@ rust-embed.workspace = true
 mime_guess.workspace = true
 hyperlocal = "0.9"
 
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [dev-dependencies]
 axum-test = "16"
 tempfile = "3"

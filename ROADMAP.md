@@ -448,7 +448,7 @@ ten serve --port 8080
 - Instance references undefined service: error on startup with clear message
 - Spawn failure: log error, continue spawning others, report summary
 
-### Phase 8.10: Production Setup (v0.8.10)
+### Phase 8.10: Production Setup (v0.8.10) - DONE
 
 One-command production deployment with HTTPS.
 
@@ -465,14 +465,14 @@ ten install --domain example.com --port 8080
 ```
 
 **Implementation:**
-- [ ] Add `install` subcommand to CLI
-- [ ] Generate systemd unit file from template
-- [ ] Copy binary to `/usr/local/bin/ten` (or use current location)
-- [ ] Create working directory `/var/lib/tenement/`
-- [ ] Copy config to `/etc/tenement/tenement.toml`
-- [ ] Run `systemctl daemon-reload && systemctl enable tenement`
-- [ ] Start service and verify health
-- [ ] Add `ten uninstall` to remove service
+- [x] Add `install` subcommand to CLI
+- [x] Generate systemd unit file from template
+- [x] Copy binary to `/usr/local/bin/ten` (or use current location)
+- [x] Create working directory `/var/lib/tenement/`
+- [x] Copy config to `/etc/tenement/tenement.toml`
+- [x] Run `systemctl daemon-reload && systemctl enable tenement`
+- [x] Start service and verify health
+- [x] Add `ten uninstall` to remove service
 
 **Generated unit:**
 ```ini
@@ -503,11 +503,11 @@ ten caddy --domain example.com
 ```
 
 **Implementation:**
-- [ ] Add `caddy` subcommand to CLI
-- [ ] Generate Caddyfile with reverse_proxy to tenement port
-- [ ] Support wildcard subdomains for instance routing
-- [ ] Optional: `ten caddy --install` to install Caddy via package manager
-- [ ] Optional: `ten caddy --systemd` to enable Caddy service
+- [x] Add `caddy` subcommand to CLI
+- [x] Generate Caddyfile with reverse_proxy to tenement port
+- [x] Support wildcard subdomains for instance routing
+- [x] Optional: `ten caddy --install` to install Caddy via package manager
+- [x] Optional: `ten caddy --systemd` to enable Caddy service
 
 **Generated Caddyfile:**
 ```

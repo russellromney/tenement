@@ -102,7 +102,40 @@ Stopped api:user123
 
 ## Step 5: Route Requests
 
-tenement doesn't include a reverse proxy—use nginx, caddy, or your own:
+tenement includes built-in subdomain routing. Start the server with a domain:
+
+```bash
+$ ten serve --port 8080 --domain myapp.com
+```
+
+Requests to `{id}.{service}.myapp.com` route to the corresponding instance:
+
+```
+user123.api.myapp.com → api:user123
+```
+
+### Production HTTPS with Caddy
+
+For automatic HTTPS with Let's Encrypt, use the built-in Caddy integration:
+
+```bash
+# Generate Caddyfile
+$ ten caddy --domain myapp.com --port 8080
+# Output: Caddyfile with wildcard subdomain routing
+
+# Or install Caddy and enable as systemd service
+$ sudo ten caddy --domain myapp.com --install --systemd
+```
+
+The generated Caddyfile handles:
+- Automatic HTTPS via Let's Encrypt
+- Wildcard subdomain routing (`*.myapp.com`)
+- HTTP to HTTPS redirect
+- Compression (gzip/zstd)
+
+### Alternative: nginx or custom proxy
+
+You can also use nginx or your own proxy:
 
 ```nginx
 # nginx.conf
@@ -112,15 +145,13 @@ upstream api_user123 {
 
 server {
     listen 80;
-    server_name user123.myapp.com;
+    server_name user123.api.myapp.com;
 
     location / {
         proxy_pass http://api_user123;
     }
 }
 ```
-
-Or integrate the tenement library into your own reverse proxy.
 
 ## Configuration Reference
 

@@ -5,6 +5,9 @@ use tenement::{init_db, Config, ConfigStore, Hypervisor, TokenStore};
 
 use tenement_cli::server;
 
+mod install;
+mod caddy;
+
 #[derive(Parser)]
 #[command(name = "tenement")]
 #[command(author, version, about = "Hyperlightweight process hypervisor")]
@@ -54,6 +57,41 @@ enum Commands {
     Config,
     /// Generate a new API token
     TokenGen,
+    /// Install tenement as a systemd service
+    Install {
+        /// Domain for the service (e.g., example.com)
+        #[arg(short, long)]
+        domain: String,
+        /// Port to listen on
+        #[arg(short, long, default_value = "8080")]
+        port: u16,
+        /// Path to config file (default: current dir tenement.toml)
+        #[arg(short, long)]
+        config: Option<PathBuf>,
+        /// Print generated files without installing
+        #[arg(long)]
+        dry_run: bool,
+    },
+    /// Uninstall tenement systemd service
+    Uninstall,
+    /// Generate Caddyfile for HTTPS reverse proxy
+    Caddy {
+        /// Domain for the service (e.g., example.com)
+        #[arg(short, long)]
+        domain: String,
+        /// Port tenement is listening on
+        #[arg(short, long, default_value = "8080")]
+        port: u16,
+        /// Output path for Caddyfile (default: stdout)
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+        /// Install Caddy via package manager
+        #[arg(long)]
+        install: bool,
+        /// Enable Caddy as systemd service
+        #[arg(long)]
+        systemd: bool,
+    },
 }
 
 #[tokio::main]
@@ -147,6 +185,15 @@ async fn main() -> Result<()> {
             println!();
             println!("Store this token securely - it cannot be recovered.");
             println!("Use it in the Authorization header: Bearer {}", token);
+        }
+        Commands::Install { domain, port, config, dry_run } => {
+            install::install(domain, port, config, dry_run)?;
+        }
+        Commands::Uninstall => {
+            install::uninstall()?;
+        }
+        Commands::Caddy { domain, port, output, install: do_install, systemd } => {
+            caddy::run(domain, port, output, do_install, systemd)?;
         }
     }
 

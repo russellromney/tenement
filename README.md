@@ -58,6 +58,8 @@ ten spawn api --id prod # Move in a tenant
 ten stop api:prod      # Eviction
 ten ps                 # Census
 ten token-gen          # New keys
+ten install            # Install as systemd service
+ten caddy              # Generate Caddyfile for HTTPS
 ```
 
 ## Routing
@@ -277,9 +279,13 @@ See [ROADMAP.md](ROADMAP.md) for the full isolation spectrum vision.
   - Config: `[instances]` section maps services to instance IDs
   - Validates references to defined services at config load time
   - Continues spawning on individual failures (logs errors, doesn't block)
+- Production setup - One-command deployment with HTTPS
+  - `ten install` - Install tenement as systemd service with security hardening
+  - `ten uninstall` - Clean removal of systemd service
+  - `ten caddy` - Generate Caddyfile with automatic HTTPS via Let's Encrypt
+  - Supports `--dry-run`, `--install` (install Caddy), `--systemd` (enable service)
 
 **Next up:**
-- Production setup (`ten install`, `ten caddy`) - One-command deployment with HTTPS
 - Cgroup lifecycle tests (Session 5) - Linux-only cgroup verification
 - WASM runtime (wasmtime) - Lightweight compute sandbox
 
