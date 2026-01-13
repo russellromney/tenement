@@ -16,9 +16,9 @@ export default defineConfig({
       components: {
         ThemeSelect: './src/components/ThemeSelect.astro',
       },
-      social: {
-        github: 'https://github.com/russellromney/tenement',
-      },
+      social: [
+        { icon: 'github', label: 'GitHub', href: 'https://github.com/russellromney/tenement' },
+      ],
       sidebar: [
         { label: 'Home', link: '/' },
         { label: 'Start Here', autogenerate: { directory: 'intro' } },
