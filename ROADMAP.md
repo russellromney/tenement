@@ -283,9 +283,10 @@ Comprehensive E2E testing foundation.
   - Core API auth, public endpoints, token formats, wrong schemes, malformed headers
   - Token rotation, subdomain bypass, edge cases, load testing
   - Added `cli/src/lib.rs` to expose server module for integration tests
-- [x] **Session 3: Hypervisor Integration Tests (10 tests)**
+- [x] **Session 3: Hypervisor Integration Tests (25 tests)**
   - `cli/tests/hypervisor_integration.rs` - Hypervisor + server + storage integration
   - Spawn/stop API visibility, logs capture, metrics updates, restart counter, health status
+  - Error handling, subdomain routing, concurrency, storage, lifecycle, weight/routing, port allocation
 - [x] **Session 4: E2E Lifecycle Tests (12 tests)**
   - `tenement/tests/e2e_lifecycle.rs` - Complete instance lifecycle tests
   - Spawn to stop, health checks, idle timeout, wake-on-request, restart behavior
@@ -304,7 +305,7 @@ Comprehensive E2E testing foundation.
   - `slum/tests/integration.rs` - Fleet orchestration integration tests
   - Server health/status, tenant routing, multi-tenant scenarios, migration, offline handling
 
-**Total: 109 tests + 8 benchmarks** (38 auth + 10 hypervisor + 12 lifecycle + 14 cgroup + 7 stress + 20 slum)
+**Total: 124 tests + 8 benchmarks** (38 auth + 25 hypervisor + 12 lifecycle + 14 cgroup + 7 stress + 20 slum + 8 deploy/routing)
 
 ### Phase 8.7: Code Quality Fixes - DONE
 
@@ -540,11 +541,12 @@ Zero-setup automatic HTTPS with Let's Encrypt - no Caddy/nginx required.
 - [x] Basic `serve_with_tls()` structure in server.rs
 
 **TODO:**
-- [ ] Fix rustls-acme 0.11 API compatibility (TLS-ALPN-01 vs HTTP-01)
+- [x] Fix rustls-acme 0.11 API compatibility (TLS-ALPN-01 vs HTTP-01)
+- [x] Fix hypervisor SOCKET_PATH env var (was not set when PORT allocated, breaking test scripts)
+- [x] Add integration tests (25 hypervisor tests covering error handling, subdomain routing, concurrency, storage, lifecycle)
 - [ ] Test with staging environment
 - [ ] Test with real domain on VPS
 - [ ] Handle subdomain certificate provisioning
-- [ ] Add integration tests
 
 **Design Decisions:**
 
@@ -591,11 +593,11 @@ ten serve --domain example.com --tls --email admin@example.com --staging
 **Files:**
 - `tenement/src/config.rs` - TlsConfig struct (staging, https_port, http_port fields)
 - `cli/src/main.rs` - CLI flags and validation
-- `cli/src/server.rs` - TlsOptions struct, serve_with_tls(), serve_http_with_challenges()
+- `cli/src/server.rs` - TlsOptions struct, serve_with_tls(), serve_http_redirect()
 - `cli/Cargo.toml` - axum-server dependency
 
 **Dependencies:**
-- `rustls-acme` v0.11 (already in workspace)
+- `rustls-acme` v0.11 with `axum` feature (workspace)
 - `axum-server` v0.7 with tls-rustls feature (added)
 
 **Rate Limits:**
