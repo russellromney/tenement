@@ -25,6 +25,7 @@ Your apps don't need a penthouse - a roof, some supervision, and the occasional 
 - Process supervision with auto-restart
 - Subdomain routing (`prod.api.example.com` → `api:prod`)
 - Weighted load balancing for canary/blue-green deployments
+- Integrated TLS with automatic Let's Encrypt certificates (in progress)
 - Built-in dashboard (Svelte)
 - Prometheus metrics at `/metrics`
 - Log capture with full-text search
@@ -58,14 +59,15 @@ Bring your own environment. Use `uv`, `bun`, `deno`, or a compiled binary. No sh
 ## CLI
 
 ```bash
-ten serve              # Open for business
+ten serve              # Open for business (HTTP)
+ten serve --tls --domain example.com --email you@email.com  # HTTPS with Let's Encrypt
 ten spawn api --id prod # Move in a tenant
 ten stop api:prod      # Eviction
 ten ps                 # Census (shows weight column)
 ten weight api:prod 50 # Set traffic weight (0-100)
 ten token-gen          # New keys
 ten install            # Install as systemd service
-ten caddy              # Generate Caddyfile for HTTPS
+ten caddy              # Generate Caddyfile for HTTPS (alternative to --tls)
 ```
 
 ## Routing
@@ -300,9 +302,9 @@ See [ROADMAP.md](ROADMAP.md) for the full isolation spectrum vision.
   - `ten ps` shows weight column
 
 **Next up:**
+- Integrated TLS - Zero-setup HTTPS with Let's Encrypt (`ten serve --tls --domain example.com`)
 - Deploy commands (`ten deploy`, `ten route`) for blue/green deployments
 - Slum health check loop
-- WASM runtime (wasmtime) - Lightweight compute sandbox
 
 ## License
 

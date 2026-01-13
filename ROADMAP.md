@@ -518,6 +518,90 @@ ten caddy --domain example.com --install --systemd
 # - *.example.com routes to tenement instances
 ```
 
+### Phase 8.11: Integrated TLS (v0.8.11) - IN PROGRESS
+
+Zero-setup automatic HTTPS with Let's Encrypt - no Caddy/nginx required.
+
+**Vision:** `ten serve --domain myapp.com --tls --email me@pm.me` just works.
+
+**Why integrated TLS?**
+- One binary, zero cognitive load
+- No second service to manage (Caddy, nginx)
+- True "build a secure multitenant SaaS in a day" experience
+- VPS deployments get the same magic as Fly.io
+
+**Implementation Status:**
+
+**Completed:**
+- [x] Extend `TlsConfig` in `config.rs` (staging, https_port, http_port)
+- [x] Add CLI flags to serve command (--tls, --email, --staging)
+- [x] TLS validation logic in main.rs
+- [x] Add `axum-server` dependency with tls-rustls feature
+- [x] Basic `serve_with_tls()` structure in server.rs
+
+**TODO:**
+- [ ] Fix rustls-acme 0.11 API compatibility (TLS-ALPN-01 vs HTTP-01)
+- [ ] Test with staging environment
+- [ ] Test with real domain on VPS
+- [ ] Handle subdomain certificate provisioning
+- [ ] Add integration tests
+
+**Design Decisions:**
+
+1. **HTTP-01 vs TLS-ALPN-01 Challenge**
+   - TLS-ALPN-01 is the rustls-acme default (simpler, no port 80 needed)
+   - HTTP-01 requires port 80 listener but is more compatible
+   - Current implementation: TLS-ALPN-01 (default rustls-acme behavior)
+
+2. **Per-subdomain certificates**
+   - Wildcard certs require DNS-01 (complex DNS provider integration)
+   - rustls-acme auto-provisions certs per subdomain on first request
+   - First request to new subdomain: ~2-5 sec delay
+   - Subsequent requests: instant (cert cached)
+
+3. **Configuration precedence**
+   - CLI flags (--tls, --email) take precedence
+   - Then `[settings.tls]` in tenement.toml
+   - Validation: require email, reject localhost domain
+
+**Config:**
+```toml
+[settings.tls]
+enabled = true
+acme_email = "admin@example.com"
+domain = "example.com"
+# cache_dir = "/var/lib/tenement/acme"  # default: {data_dir}/acme
+# staging = false  # use true for testing
+# https_port = 443
+# http_port = 80
+```
+
+**CLI:**
+```bash
+# Development (no TLS)
+ten serve --port 8080
+
+# Production with TLS
+ten serve --domain example.com --tls --email admin@example.com
+
+# Testing with staging certs (avoids rate limits)
+ten serve --domain example.com --tls --email admin@example.com --staging
+```
+
+**Files:**
+- `tenement/src/config.rs` - TlsConfig struct (staging, https_port, http_port fields)
+- `cli/src/main.rs` - CLI flags and validation
+- `cli/src/server.rs` - TlsOptions struct, serve_with_tls(), serve_http_with_challenges()
+- `cli/Cargo.toml` - axum-server dependency
+
+**Dependencies:**
+- `rustls-acme` v0.11 (already in workspace)
+- `axum-server` v0.7 with tls-rustls feature (added)
+
+**Rate Limits:**
+- Production: 50 certs/domain/week
+- Staging: much higher (use for testing)
+
 ### Phase 9: Deployment Tooling (v0.9) - IN PROGRESS
 
 Weighted routing, blue/green deployments, and canary releases.

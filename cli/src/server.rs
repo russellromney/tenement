@@ -1,4 +1,4 @@
-//! HTTP server with subdomain routing and reverse proxy
+//! HTTP server with subdomain routing, reverse proxy, and automatic TLS
 
 use anyhow::Result;
 use axum::{
@@ -8,7 +8,7 @@ use axum::{
     middleware::{self, Next},
     response::{
         sse::{Event, KeepAlive, Sse},
-        IntoResponse, Json, Response,
+        IntoResponse, Json, Redirect, Response,
     },
     routing::get,
     Router,
@@ -16,14 +16,28 @@ use axum::{
 use futures::stream::Stream;
 use hyper_util::{client::legacy::Client, rt::TokioExecutor};
 use hyperlocal::UnixConnector;
+use rustls_acme::{caches::DirCache, AcmeConfig, UseChallenge::Http01};
 use serde::{Deserialize, Serialize};
 use std::convert::Infallible;
-use std::path::Path;
+use std::net::SocketAddr;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tenement::{ConfigStore, Hypervisor, LogLevel, LogQuery, TokenStore};
 use tokio_stream::wrappers::BroadcastStream;
 use tokio_stream::StreamExt;
 use tower_http::trace::TraceLayer;
+
+/// TLS configuration for the server
+#[derive(Debug, Clone)]
+pub struct TlsOptions {
+    pub enabled: bool,
+    pub email: String,
+    pub domain: String,
+    pub cache_dir: PathBuf,
+    pub staging: bool,
+    pub https_port: u16,
+    pub http_port: u16,
+}
 
 /// Application state shared across handlers
 #[derive(Clone)]
@@ -107,12 +121,13 @@ async fn auth_middleware(
     }
 }
 
-/// Start the HTTP server
+/// Start the HTTP server (with optional TLS)
 pub async fn serve(
     hypervisor: Arc<Hypervisor>,
     domain: String,
     port: u16,
     config_store: Arc<ConfigStore>,
+    tls_options: Option<TlsOptions>,
 ) -> Result<()> {
     // Spawn configured instances before accepting connections
     let (success, failed) = hypervisor.spawn_configured_instances().await;
@@ -137,15 +152,132 @@ pub async fn serve(
         config_store,
     };
 
-    let app = create_router(state);
+    match tls_options {
+        Some(tls) if tls.enabled => {
+            serve_with_tls(state, tls).await
+        }
+        _ => {
+            serve_http_only(state, port).await
+        }
+    }
+}
 
+/// HTTP-only server (no TLS)
+async fn serve_http_only(state: AppState, port: u16) -> Result<()> {
+    let app = create_router(state.clone());
     let addr = format!("0.0.0.0:{}", port);
     let listener = tokio::net::TcpListener::bind(&addr).await?;
 
     tracing::info!("tenement listening on http://{}", addr);
-    tracing::info!("Dashboard at http://{}", domain);
+    tracing::info!("Dashboard at http://{}", state.domain);
 
     axum::serve(listener, app).await?;
+    Ok(())
+}
+
+/// HTTPS server with automatic Let's Encrypt certificates
+async fn serve_with_tls(state: AppState, tls: TlsOptions) -> Result<()> {
+    // Ensure cache directory exists
+    std::fs::create_dir_all(&tls.cache_dir)?;
+
+    // Create ACME configuration with HTTP-01 challenge type
+    let mut acme_state = AcmeConfig::new([tls.domain.clone()])
+        .contact([format!("mailto:{}", tls.email)])
+        .cache(DirCache::new(&tls.cache_dir))
+        .directory_lets_encrypt(!tls.staging) // true = production, false = staging
+        .challenge_type(Http01)
+        .state();
+
+    // Get acceptor for TLS connections
+    let acceptor = acme_state.axum_acceptor(acme_state.default_rustls_config());
+
+    // Get HTTP-01 challenge service for port 80
+    let challenge_service = acme_state.http01_challenge_tower_service();
+
+    // Spawn ACME event handler (handles cert acquisition/renewal)
+    tokio::spawn(async move {
+        loop {
+            match acme_state.next().await {
+                Some(Ok(event)) => {
+                    tracing::info!("ACME event: {:?}", event);
+                }
+                Some(Err(err)) => {
+                    tracing::error!("ACME error: {:?}", err);
+                }
+                None => break,
+            }
+        }
+    });
+
+    // Create HTTP server for port 80 (ACME challenges + redirect)
+    let https_port = tls.https_port;
+    let http_port = tls.http_port;
+
+    let http_server = tokio::spawn(async move {
+        if let Err(e) = serve_http_with_challenges(http_port, https_port, challenge_service).await {
+            tracing::error!("HTTP server error: {}", e);
+        }
+    });
+
+    // Create HTTPS server
+    let app = create_router(state.clone());
+    let https_addr = SocketAddr::from(([0, 0, 0, 0], tls.https_port));
+
+    tracing::info!("tenement listening on https://{}:{}", tls.domain, tls.https_port);
+    tracing::info!("HTTP + ACME challenges on port {}", tls.http_port);
+    if tls.staging {
+        tracing::warn!("Using Let's Encrypt STAGING environment (certs not trusted by browsers)");
+    }
+
+    // Bind and serve HTTPS
+    axum_server::bind(https_addr)
+        .acceptor(acceptor)
+        .serve(app.into_make_service())
+        .await?;
+
+    http_server.abort();
+    Ok(())
+}
+
+/// HTTP server on port 80 - handles ACME HTTP-01 challenges and redirects other traffic to HTTPS
+async fn serve_http_with_challenges<S>(
+    http_port: u16,
+    https_port: u16,
+    challenge_service: S,
+) -> Result<()>
+where
+    S: tower::Service<Request<Body>, Response = Response> + Clone + Send + 'static,
+    S::Future: Send,
+    S::Error: std::error::Error + Send + Sync + 'static,
+{
+    let redirect_app = Router::new()
+        // ACME HTTP-01 challenge endpoint
+        .route_service("/.well-known/acme-challenge/{token}", challenge_service)
+        // Redirect everything else to HTTPS
+        .fallback(move |Host(host): Host, req: Request<Body>| {
+            async move {
+                // Strip port from host if present
+                let host = host.split(':').next().unwrap_or(&host);
+                let path = req.uri().path_and_query()
+                    .map(|pq| pq.as_str())
+                    .unwrap_or("/");
+
+                let redirect_url = if https_port == 443 {
+                    format!("https://{}{}", host, path)
+                } else {
+                    format!("https://{}:{}{}", host, https_port, path)
+                };
+
+                Redirect::permanent(&redirect_url)
+            }
+        });
+
+    let addr = SocketAddr::from(([0, 0, 0, 0], http_port));
+    let listener = tokio::net::TcpListener::bind(addr).await?;
+
+    tracing::debug!("HTTP server listening on port {} (ACME challenges + redirect)", http_port);
+
+    axum::serve(listener, redirect_app).await?;
     Ok(())
 }
 

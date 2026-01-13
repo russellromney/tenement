@@ -75,6 +75,62 @@ pub struct Settings {
     /// Maximum backoff delay (in milliseconds)
     #[serde(default = "default_backoff_max_ms")]
     pub backoff_max_ms: u64,
+
+    /// TLS configuration for HTTPS
+    #[serde(default)]
+    pub tls: TlsConfig,
+}
+
+/// TLS configuration for the HTTP API server
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TlsConfig {
+    /// Enable TLS
+    #[serde(default)]
+    pub enabled: bool,
+
+    /// Email for Let's Encrypt ACME registration
+    pub acme_email: Option<String>,
+
+    /// Domain name for TLS certificate
+    pub domain: Option<String>,
+
+    /// Directory for storing ACME account and certificate cache
+    /// Defaults to {data_dir}/acme
+    pub cache_dir: Option<PathBuf>,
+
+    /// Use Let's Encrypt staging environment (for testing, avoids rate limits)
+    #[serde(default)]
+    pub staging: bool,
+
+    /// HTTPS port (default: 443)
+    #[serde(default = "default_https_port")]
+    pub https_port: u16,
+
+    /// HTTP port for redirects and ACME challenges (default: 80)
+    #[serde(default = "default_http_port")]
+    pub http_port: u16,
+}
+
+fn default_https_port() -> u16 {
+    443
+}
+
+fn default_http_port() -> u16 {
+    80
+}
+
+impl Default for TlsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            acme_email: None,
+            domain: None,
+            cache_dir: None,
+            staging: false,
+            https_port: default_https_port(),
+            http_port: default_http_port(),
+        }
+    }
 }
 
 impl Default for Settings {
@@ -86,6 +142,7 @@ impl Default for Settings {
             restart_window: default_restart_window(),
             backoff_base_ms: default_backoff_base_ms(),
             backoff_max_ms: default_backoff_max_ms(),
+            tls: TlsConfig::default(),
         }
     }
 }
@@ -130,15 +187,11 @@ pub struct ProcessConfig {
     pub args: Vec<String>,
 
     /// Unix socket path pattern (supports {name}, {id})
-    /// Used when `port` is not specified.
+    /// Note: For process/namespace/sandbox runtimes, tenement automatically allocates
+    /// TCP ports from the range 30000-40000 and sets the PORT environment variable.
+    /// This socket field is primarily used for vsock communication with VMs.
     #[serde(default = "default_socket")]
     pub socket: String,
-
-    /// TCP port for the service to listen on (alternative to socket)
-    /// When specified, the service listens on 127.0.0.1:{port} instead of a Unix socket.
-    /// The PORT environment variable is set automatically.
-    #[serde(default)]
-    pub port: Option<u16>,
 
     /// Health check endpoint (e.g., "/health")
     #[serde(default)]
@@ -374,19 +427,19 @@ impl Config {
     }
 }
 
-/// Listen address for a service - either a Unix socket path or a TCP address
+/// Listen address for a service
 #[derive(Debug, Clone)]
 pub enum ListenAddr {
     /// Unix socket path
     Socket(PathBuf),
-    /// TCP address (host:port)
-    Tcp(String),
+    /// TCP address (127.0.0.1:port)
+    Tcp(String, u16),
 }
 
 impl ListenAddr {
     /// Check if this is a TCP address
     pub fn is_tcp(&self) -> bool {
-        matches!(self, ListenAddr::Tcp(_))
+        matches!(self, ListenAddr::Tcp(_, _))
     }
 
     /// Check if this is a Unix socket
@@ -397,7 +450,7 @@ impl ListenAddr {
     /// Get the TCP port if this is a TCP address
     pub fn port(&self) -> Option<u16> {
         match self {
-            ListenAddr::Tcp(addr) => addr.split(':').last()?.parse().ok(),
+            ListenAddr::Tcp(_, port) => Some(*port),
             ListenAddr::Socket(_) => None,
         }
     }
@@ -434,15 +487,11 @@ impl ProcessConfig {
         self.isolation
     }
 
-    /// Check if this service uses TCP port instead of Unix socket
-    pub fn uses_port(&self) -> bool {
-        self.port.is_some()
-    }
-
-    /// Get the listen address for an instance (socket path or TCP address)
-    pub fn listen_addr(&self, name: &str, id: &str) -> ListenAddr {
-        if let Some(port) = self.port {
-            ListenAddr::Tcp(format!("127.0.0.1:{}", port))
+    /// Get the listen address for an instance
+    /// Returns a socket path. TCP ports are allocated separately by the hypervisor.
+    pub fn listen_addr(&self, name: &str, id: &str, port: Option<u16>) -> ListenAddr {
+        if let Some(port) = port {
+            ListenAddr::Tcp(format!("127.0.0.1:{}", port), port)
         } else {
             ListenAddr::Socket(self.socket_path(name, id))
         }
@@ -450,9 +499,9 @@ impl ProcessConfig {
 
     /// Interpolate variables in a string
     /// Supports: {name}, {id}, {data_dir}, {socket}, {port}
-    pub fn interpolate(&self, template: &str, name: &str, id: &str, data_dir: &Path) -> String {
+    pub fn interpolate(&self, template: &str, name: &str, id: &str, data_dir: &Path, port: Option<u16>) -> String {
         let socket = self.socket_path(name, id);
-        let port_str = self.port.map(|p| p.to_string()).unwrap_or_default();
+        let port_str = port.map(|p| p.to_string()).unwrap_or_default();
         template
             .replace("{name}", name)
             .replace("{id}", id)
@@ -470,23 +519,23 @@ impl ProcessConfig {
     }
 
     /// Get interpolated command
-    pub fn command_interpolated(&self, name: &str, id: &str, data_dir: &Path) -> String {
-        self.interpolate(&self.command, name, id, data_dir)
+    pub fn command_interpolated(&self, name: &str, id: &str, data_dir: &Path, port: Option<u16>) -> String {
+        self.interpolate(&self.command, name, id, data_dir, port)
     }
 
     /// Get interpolated args
-    pub fn args_interpolated(&self, name: &str, id: &str, data_dir: &Path) -> Vec<String> {
+    pub fn args_interpolated(&self, name: &str, id: &str, data_dir: &Path, port: Option<u16>) -> Vec<String> {
         self.args
             .iter()
-            .map(|arg| self.interpolate(arg, name, id, data_dir))
+            .map(|arg| self.interpolate(arg, name, id, data_dir, port))
             .collect()
     }
 
     /// Get interpolated environment variables
-    pub fn env_interpolated(&self, name: &str, id: &str, data_dir: &Path) -> HashMap<String, String> {
+    pub fn env_interpolated(&self, name: &str, id: &str, data_dir: &Path, port: Option<u16>) -> HashMap<String, String> {
         self.env
             .iter()
-            .map(|(k, v)| (k.clone(), self.interpolate(v, name, id, data_dir)))
+            .map(|(k, v)| (k.clone(), self.interpolate(v, name, id, data_dir, port)))
             .collect()
     }
 }
@@ -584,7 +633,7 @@ SOCKET = "{socket}"
         let socket = api.socket_path("api", "user123");
         assert_eq!(socket, PathBuf::from("/tmp/api-user123.sock"));
 
-        let env = api.env_interpolated("api", "user123", &data_dir);
+        let env = api.env_interpolated("api", "user123", &data_dir, None);
         assert_eq!(env.get("DB"), Some(&"/var/lib/tenement/user123/app.db".to_string()));
         assert_eq!(env.get("SOCKET"), Some(&"/tmp/api-user123.sock".to_string()));
     }
@@ -706,7 +755,7 @@ command = "./api --id {id} --name {name}"
         let api = config.get_service("api").unwrap();
         let data_dir = PathBuf::from("/data");
 
-        let cmd = api.command_interpolated("api", "user123", &data_dir);
+        let cmd = api.command_interpolated("api", "user123", &data_dir, None);
         assert_eq!(cmd, "./api --id user123 --name api");
     }
 
@@ -721,7 +770,7 @@ args = ["--socket", "{socket}", "--data", "{data_dir}/{id}"]
         let api = config.get_service("api").unwrap();
         let data_dir = PathBuf::from("/data");
 
-        let args = api.args_interpolated("api", "user123", &data_dir);
+        let args = api.args_interpolated("api", "user123", &data_dir, None);
         assert_eq!(args.len(), 4);
         assert_eq!(args[0], "--socket");
         assert_eq!(args[1], "/tmp/api-user123.sock");
@@ -1401,38 +1450,13 @@ worker = ["bg-1", "bg-2", "bg-3"]
     }
 
     // ===================
-    // TCP PORT CONFIG TESTS
+    // TCP PORT AND LISTEN ADDR TESTS
     // ===================
+    // Note: Ports are now auto-allocated by the hypervisor from range 30000-40000.
+    // These tests verify that listen_addr() works correctly when a port is provided.
 
     #[test]
-    fn test_port_config() {
-        let config_str = r#"
-[service.api]
-command = "./api"
-port = 3000
-"#;
-        let config = Config::from_str(config_str).unwrap();
-        let api = config.get_service("api").unwrap();
-
-        assert_eq!(api.port, Some(3000));
-        assert!(api.uses_port());
-    }
-
-    #[test]
-    fn test_port_default_none() {
-        let config_str = r#"
-[service.api]
-command = "./api"
-"#;
-        let config = Config::from_str(config_str).unwrap();
-        let api = config.get_service("api").unwrap();
-
-        assert_eq!(api.port, None);
-        assert!(!api.uses_port());
-    }
-
-    #[test]
-    fn test_socket_with_no_port() {
+    fn test_socket_path() {
         let config_str = r#"
 [service.api]
 command = "./api"
@@ -1441,8 +1465,6 @@ socket = "/tmp/api-{id}.sock"
         let config = Config::from_str(config_str).unwrap();
         let api = config.get_service("api").unwrap();
 
-        assert_eq!(api.port, None);
-        assert!(!api.uses_port());
         assert_eq!(api.socket_path("api", "test"), PathBuf::from("/tmp/api-test.sock"));
     }
 
@@ -1451,12 +1473,12 @@ socket = "/tmp/api-{id}.sock"
         let config_str = r#"
 [service.api]
 command = "./api"
-port = 8080
 "#;
         let config = Config::from_str(config_str).unwrap();
         let api = config.get_service("api").unwrap();
 
-        let addr = api.listen_addr("api", "test");
+        // Simulate hypervisor allocating port 8080
+        let addr = api.listen_addr("api", "test", Some(8080));
         assert!(addr.is_tcp());
         assert!(!addr.is_socket());
         assert_eq!(addr.port(), Some(8080));
@@ -1472,7 +1494,8 @@ socket = "/tmp/api-{id}.sock"
         let config = Config::from_str(config_str).unwrap();
         let api = config.get_service("api").unwrap();
 
-        let addr = api.listen_addr("api", "test");
+        // No port allocated (e.g., for VMs using vsock)
+        let addr = api.listen_addr("api", "test", None);
         assert!(addr.is_socket());
         assert!(!addr.is_tcp());
         assert_eq!(addr.port(), None);
@@ -1483,22 +1506,21 @@ socket = "/tmp/api-{id}.sock"
         let config_str = r#"
 [service.api]
 command = "./api --port {port}"
-port = 3000
 "#;
         let config = Config::from_str(config_str).unwrap();
         let api = config.get_service("api").unwrap();
         let data_dir = PathBuf::from("/data");
 
-        let cmd = api.command_interpolated("api", "test", &data_dir);
+        // Simulate hypervisor allocating port 3000
+        let cmd = api.command_interpolated("api", "test", &data_dir, Some(3000));
         assert_eq!(cmd, "./api --port 3000");
     }
 
     #[test]
-    fn test_port_with_other_options() {
+    fn test_config_with_other_options() {
         let config_str = r#"
 [service.api]
 command = "./api"
-port = 4000
 health = "/health"
 restart = "always"
 idle_timeout = 300
@@ -1507,7 +1529,6 @@ memory_limit_mb = 256
         let config = Config::from_str(config_str).unwrap();
         let api = config.get_service("api").unwrap();
 
-        assert_eq!(api.port, Some(4000));
         assert_eq!(api.health, Some("/health".to_string()));
         assert_eq!(api.restart, "always");
         assert_eq!(api.idle_timeout, Some(300));

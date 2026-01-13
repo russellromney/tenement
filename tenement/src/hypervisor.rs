@@ -5,6 +5,7 @@ use crate::config::Config;
 use crate::instance::{HealthStatus, Instance, InstanceId, InstanceInfo};
 use crate::logs::LogBuffer;
 use crate::metrics::Metrics;
+use crate::port_allocator::PortAllocator;
 use crate::runtime::{NamespaceRuntime, ProcessRuntime, Runtime, RuntimeHandle, RuntimeType, SpawnConfig};
 use crate::storage::{calculate_dir_size, StorageInfo};
 #[cfg(feature = "sandbox")]
@@ -26,6 +27,8 @@ pub struct Hypervisor {
     instances: RwLock<HashMap<InstanceId, Instance>>,
     log_buffer: Arc<LogBuffer>,
     metrics: Arc<Metrics>,
+    /// Port allocator for TCP ports (30000-40000)
+    port_allocator: Arc<PortAllocator>,
     /// Process runtime (always available, fallback)
     process_runtime: ProcessRuntime,
     /// Namespace runtime (default on Linux)
@@ -42,12 +45,14 @@ impl Hypervisor {
     pub fn new(config: Config) -> Arc<Self> {
         let namespace_runtime = NamespaceRuntime::new();
         let cgroup_manager = CgroupManager::new();
+        let port_allocator = Arc::new(PortAllocator::new());
 
         Arc::new(Self {
             config,
             instances: RwLock::new(HashMap::new()),
             log_buffer: LogBuffer::new(),
             metrics: Metrics::new(),
+            port_allocator,
             process_runtime: ProcessRuntime::new(),
             namespace_runtime,
             #[cfg(feature = "sandbox")]
@@ -60,12 +65,14 @@ impl Hypervisor {
     pub fn with_log_buffer(config: Config, log_buffer: Arc<LogBuffer>) -> Arc<Self> {
         let namespace_runtime = NamespaceRuntime::new();
         let cgroup_manager = CgroupManager::new();
+        let port_allocator = Arc::new(PortAllocator::new());
 
         Arc::new(Self {
             config,
             instances: RwLock::new(HashMap::new()),
             log_buffer,
             metrics: Metrics::new(),
+            port_allocator,
             process_runtime: ProcessRuntime::new(),
             namespace_runtime,
             #[cfg(feature = "sandbox")]
@@ -170,16 +177,26 @@ impl Hypervisor {
 
         info!("Spawning instance {} (isolation: {})", instance_id, isolation);
 
+        // Allocate a TCP port for process/namespace/sandbox runtimes
+        // VMs (Firecracker/QEMU) use vsock, so they don't need TCP ports
+        let port = match isolation {
+            RuntimeType::Process | RuntimeType::Namespace | RuntimeType::Sandbox => {
+                Some(self.port_allocator.allocate().await
+                    .with_context(|| format!("Failed to allocate port for {}", instance_id))?)
+            }
+            RuntimeType::Firecracker | RuntimeType::Qemu => None,
+        };
+
         // Build environment
-        let command = process_config.command_interpolated(process_name, id, data_dir);
-        let args = process_config.args_interpolated(process_name, id, data_dir);
-        let mut env = process_config.env_interpolated(process_name, id, data_dir);
+        let command = process_config.command_interpolated(process_name, id, data_dir, port);
+        let args = process_config.args_interpolated(process_name, id, data_dir, port);
+        let mut env = process_config.env_interpolated(process_name, id, data_dir, port);
 
         // Merge extra env vars
         env.extend(extra_env);
 
-        // Add socket path or port to env based on config
-        if let Some(port) = process_config.port {
+        // Add PORT env var for TCP-based runtimes
+        if let Some(port) = port {
             env.insert("PORT".to_string(), port.to_string());
         } else {
             env.insert("SOCKET_PATH".to_string(), socket.to_string_lossy().to_string());
@@ -272,7 +289,7 @@ impl Hypervisor {
             handle,
             runtime_type,
             socket: socket.clone(),
-            port: process_config.port,
+            port,
             started_at: now,
             restarts: 0,
             consecutive_failures: 0,
@@ -297,7 +314,7 @@ impl Hypervisor {
         self.metrics.instances_up.inc();
 
         // Wait for service to be ready
-        if let Some(port) = process_config.port {
+        if let Some(port) = port {
             // TCP mode: try to connect
             let addr = format!("127.0.0.1:{}", port);
             for _ in 0..50 {
@@ -309,7 +326,7 @@ impl Hypervisor {
             }
             warn!("Instance {} TCP port {} not ready after 500ms", instance_id, port);
         } else {
-            // Socket mode: check if file exists
+            // Socket mode: check if file exists (VMs use vsock)
             for _ in 0..50 {
                 if socket.exists() {
                     info!("Instance {} ready at {:?}", instance_id, socket);
@@ -337,6 +354,11 @@ impl Hypervisor {
                 .kill()
                 .await
                 .with_context(|| format!("Failed to kill process: {}", instance_id))?;
+
+            // Release allocated port back to the pool
+            if let Some(port) = instance.port {
+                self.port_allocator.release(port).await;
+            }
 
             // Clean up cgroup (if one was created)
             if let Err(e) = self.cgroup_manager.remove_cgroup(&instance_id.to_string()) {
@@ -994,7 +1016,6 @@ mod tests {
             command: command.to_string(),
             args: args.into_iter().map(|s| s.to_string()).collect(),
             socket: "/tmp/{name}-{id}.sock".to_string(),
-            port: None,
             isolation: RuntimeType::Process,
             health: None,
             env: HashMap::new(),
@@ -1683,7 +1704,7 @@ sleep 30
     }
 
     #[tokio::test]
-    async fn test_spawn_sets_socket_path_env() {
+    async fn test_spawn_sets_port_env() {
         let config = test_config_with_process("api", "env", vec![]);
         let hypervisor = Hypervisor::new(config);
 
@@ -1691,8 +1712,9 @@ sleep 30
 
         tokio::time::sleep(Duration::from_millis(100)).await;
 
+        // Process runtime should get a PORT env var with auto-allocated port (30000-40000)
         let logs = hypervisor.log_buffer().query(&crate::logs::LogQuery::default()).await;
-        assert!(logs.iter().any(|l| l.message.contains("SOCKET_PATH=")));
+        assert!(logs.iter().any(|l| l.message.contains("PORT=3")));
     }
 
     // ===================
@@ -1765,7 +1787,6 @@ sleep 30
                 command: "/nonexistent/binary".to_string(),
                 args: vec![],
                 socket: "/tmp/{name}-{id}.sock".to_string(),
-                port: None,
                 isolation: RuntimeType::Process,
                 health: None,
                 env: HashMap::new(),

@@ -10,6 +10,7 @@ pub mod hypervisor;
 pub mod instance;
 pub mod logs;
 pub mod metrics;
+pub mod port_allocator;
 pub mod runtime;
 pub mod storage;
 pub mod store;
@@ -21,6 +22,7 @@ pub use hypervisor::Hypervisor;
 pub use instance::{Instance, InstanceId, InstanceStatus};
 pub use logs::{LogBuffer, LogEntry, LogLevel, LogQuery};
 pub use metrics::Metrics;
+pub use port_allocator::PortAllocator;
 pub use runtime::{ProcessRuntime, Runtime, RuntimeHandle, RuntimeType, SpawnConfig, VmConfig};
 #[cfg(feature = "sandbox")]
 pub use runtime::SandboxRuntime;

@@ -20,12 +20,21 @@ struct Cli {
 enum Commands {
     /// Start the HTTP server with dashboard and reverse proxy
     Serve {
-        /// Port to listen on
+        /// Port to listen on (used when TLS is disabled)
         #[arg(short, long, default_value = "8080")]
         port: u16,
         /// Domain for subdomain routing (e.g., example.com)
         #[arg(short, long, default_value = "localhost")]
         domain: String,
+        /// Enable TLS with automatic Let's Encrypt certificates
+        #[arg(long)]
+        tls: bool,
+        /// Email for Let's Encrypt registration (required with --tls)
+        #[arg(long, requires = "tls")]
+        email: Option<String>,
+        /// Use Let's Encrypt staging environment (for testing, avoids rate limits)
+        #[arg(long)]
+        staging: bool,
     },
     /// Spawn a new process instance
     Spawn {
@@ -133,14 +142,79 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Serve { port, domain } => {
+        Commands::Serve { port, domain, tls, email, staging } => {
             let config = Config::load()?;
             let db_path = PathBuf::from(&config.settings.data_dir).join("tenement.db");
             let pool = init_db(&db_path).await?;
             let config_store = std::sync::Arc::new(ConfigStore::new(pool));
 
+            // Build TLS options from CLI flags and config file
+            let tls_options = if tls {
+                // CLI --tls flag takes precedence
+                let acme_email = email
+                    .or_else(|| config.settings.tls.acme_email.clone())
+                    .ok_or_else(|| anyhow::anyhow!(
+                        "TLS enabled but no email provided.\n\
+                        Use --email <your@email.com> for Let's Encrypt registration."
+                    ))?;
+
+                if domain == "localhost" {
+                    anyhow::bail!(
+                        "TLS cannot be used with localhost.\n\
+                        Provide a real domain with --domain <your-domain.com>"
+                    );
+                }
+
+                let cache_dir = config.settings.tls.cache_dir
+                    .clone()
+                    .unwrap_or_else(|| config.settings.data_dir.join("acme"));
+
+                Some(server::TlsOptions {
+                    enabled: true,
+                    email: acme_email,
+                    domain: domain.clone(),
+                    cache_dir,
+                    staging: staging || config.settings.tls.staging,
+                    https_port: config.settings.tls.https_port,
+                    http_port: config.settings.tls.http_port,
+                })
+            } else if config.settings.tls.enabled {
+                // TLS enabled via config file
+                let acme_email = config.settings.tls.acme_email.clone()
+                    .ok_or_else(|| anyhow::anyhow!(
+                        "TLS enabled in config but acme_email not set.\n\
+                        Add acme_email to [settings.tls] in tenement.toml"
+                    ))?;
+
+                let tls_domain = config.settings.tls.domain.clone()
+                    .unwrap_or_else(|| domain.clone());
+
+                if tls_domain == "localhost" {
+                    anyhow::bail!(
+                        "TLS cannot be used with localhost.\n\
+                        Set domain in [settings.tls] in tenement.toml"
+                    );
+                }
+
+                let cache_dir = config.settings.tls.cache_dir
+                    .clone()
+                    .unwrap_or_else(|| config.settings.data_dir.join("acme"));
+
+                Some(server::TlsOptions {
+                    enabled: true,
+                    email: acme_email,
+                    domain: tls_domain,
+                    cache_dir,
+                    staging: staging || config.settings.tls.staging,
+                    https_port: config.settings.tls.https_port,
+                    http_port: config.settings.tls.http_port,
+                })
+            } else {
+                None
+            };
+
             let hypervisor = Hypervisor::new(config);
-            server::serve(hypervisor, domain, port, config_store).await?;
+            server::serve(hypervisor, domain, port, config_store, tls_options).await?;
         }
         Commands::Spawn { process, id } => {
             let hypervisor = Hypervisor::from_config_file()?;
