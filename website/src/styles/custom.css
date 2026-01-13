@@ -126,27 +126,7 @@ a:hover {
   border-bottom-color: var(--color-primary);
 }
 
-code {
-  background: var(--color-bg-light);
-  border-radius: var(--radius-sm);
-  font-family: var(--font-mono);
-  font-size: 0.9em;
-  padding: 0.2em 0.4em;
-}
-
-pre {
-  background: var(--color-bg-light);
-  border-left: 3px solid var(--color-primary);
-  border-radius: var(--radius-md);
-  overflow-x: auto;
-  padding: var(--space-lg);
-  margin: var(--space-lg) 0;
-}
-
-pre code {
-  background: transparent;
-  padding: 0;
-}
+/* Let Starlight/expressive-code handle code block theming */
 
 /* Tables */
 
