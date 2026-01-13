@@ -35,6 +35,8 @@ description: Future development and features
 - ✅ Instance auto-start - Declare instances in `[instances]` section
 - ✅ Weighted routing for canary/blue-green deployments
 - ✅ `ten weight` command for traffic distribution
+- ✅ `ten deploy` - Deploy new version and wait for health
+- ✅ `ten route` - Atomic traffic swap for blue/green deployments
 
 ### Observability
 - ✅ Dashboard - Svelte web UI for instance management
@@ -48,7 +50,6 @@ description: Future development and features
 
 ## In Progress
 
-- 🔄 Deploy commands (`ten deploy`, `ten route`) for blue/green deployments
 - 🔄 Slum health check loop
 
 ## Planned (Next)

@@ -16,18 +16,23 @@ customer2.myapp.com → api:customer2 → /tmp/api-customer2.sock
 ```python
 # app.py
 import os
-from flask import Flask
+from fastapi import FastAPI
+import uvicorn
 
-app = Flask(__name__)
+app = FastAPI()
 db_path = os.getenv("DATABASE_PATH")  # /data/customer123/app.db
 
-@app.route("/")
+@app.get("/")
 def hello():
     return "Hello!"
 
+@app.get("/health")
+def health():
+    return {"status": "ok"}
+
 if __name__ == "__main__":
-    socket_path = os.getenv("SOCKET_PATH")
-    app.run(unix_socket=socket_path)
+    port = int(os.getenv("PORT", "8000"))
+    uvicorn.run(app, host="127.0.0.1", port=port)
 ```
 
 **2. Configure tenement**
@@ -48,7 +53,7 @@ DATABASE_PATH = "{data_dir}/{id}/app.db"
 
 **3. Spawn per customer**
 ```bash
-tenement spawn api --id customer123
+ten spawn api --id customer123
 # customer123.myapp.com now routes to their isolated instance
 ```
 
@@ -70,4 +75,4 @@ server {
 - **Per-customer billing** - Easy to track and charge
 - **Cost effective** - Idle customers cost $0 (scale-to-zero)
 
-Each customer is just: `tenement spawn api --id $customer_id`
+Each customer is just: `ten spawn api --id $customer_id`

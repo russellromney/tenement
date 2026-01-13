@@ -3,83 +3,117 @@ title: Quick Start
 description: Get tenement running in 5 minutes
 ---
 
+## Prerequisites
+
+- **Linux** - tenement uses Linux-specific features (namespaces, cgroups)
+- **Rust toolchain** - for installation via cargo
+- **Your app** - must listen on the `PORT` environment variable
+
 ## Install
 
 ```bash
 cargo install tenement-cli
 ```
 
-This installs the `ten` command. Verify:
+Verify installation:
 
 ```bash
-$ ten --version
-ten 0.1.0
+ten --version
 ```
 
-## 1. Create a Config
+## Complete Example
+
+Let's run a Python app with tenement. This example uses FastAPI but any HTTP server works.
+
+### 1. Create Your App
+
+Create `app.py`:
+
+```python
+import os
+from fastapi import FastAPI
+import uvicorn
+
+app = FastAPI()
+
+@app.get("/")
+def root():
+    return {"message": "Hello from tenement!"}
+
+@app.get("/health")
+def health():
+    return {"status": "ok"}
+
+if __name__ == "__main__":
+    port = int(os.getenv("PORT", "8000"))
+    uvicorn.run(app, host="127.0.0.1", port=port)
+```
+
+### 2. Create Config
 
 Create `tenement.toml`:
 
 ```toml
-[settings]
-data_dir = "/var/lib/myapp"
-
 [service.api]
-command = "./my-api"
-socket = "/tmp/api-{id}.sock"
+command = "uv run python app.py"
 health = "/health"
-idle_timeout = 300        # Auto-stop after 5 mins
-restart = "on-failure"    # Restart on crashes
-
-[service.api.env]
-DATABASE_PATH = "{data_dir}/{id}/app.db"
-LOG_LEVEL = "info"
 ```
 
-## 2. Spawn an Instance
+That's it! Tenement auto-allocates a port and sets the `PORT` environment variable.
+
+### 3. Start the Server
 
 ```bash
-$ ten spawn api --id user123
-Spawned api:user123
-Socket: /tmp/api-user123.sock
+ten serve --port 8080 --domain localhost
 ```
 
-Your process is running and listening on `/tmp/api-user123.sock`.
+### 4. Spawn an Instance
 
-## 3. List Instances
+In another terminal:
 
 ```bash
-$ ten ps
-INSTANCE             SOCKET                      UPTIME     HEALTH
-api:user123          /tmp/api-user123.sock       2m         healthy
+ten spawn api --id prod
 ```
 
-## 4. Route Traffic
-
-Point a reverse proxy to the socket:
-
-```nginx
-server {
-    listen 80;
-    server_name user123.myapp.com;
-
-    location / {
-        proxy_pass http://unix:/tmp/api-user123.sock;
-    }
-}
-```
-
-## 5. Stop When Done
+### 5. Test It
 
 ```bash
-$ ten stop api:user123
-Stopped api:user123
+# Direct access via subdomain
+curl http://prod.api.localhost:8080/
+# {"message": "Hello from tenement!"}
+
+# Health check
+curl http://prod.api.localhost:8080/health
+# {"status": "ok"}
+
+# List instances
+ten ps
+# INSTANCE    PORT    UPTIME   HEALTH   WEIGHT
+# api:prod    30001   2m       healthy  100
 ```
 
-Or it stops automatically after `idle_timeout` (5 minutes in this example).
+### 6. Stop When Done
+
+```bash
+ten stop api:prod
+```
+
+## Key Concepts
+
+- **Service**: A template defining how to run your app (`[service.api]`)
+- **Instance**: A running copy of a service with an ID (`api:prod`, `api:staging`)
+- **PORT**: Auto-set environment variable your app should listen on
+- **Health check**: HTTP endpoint tenement polls to verify your app is running
+
+## What Your App Needs
+
+1. **Listen on PORT**: Read `PORT` from environment, don't hardcode
+2. **Health endpoint**: Return HTTP 200 at `/health` (or your configured path)
+3. **Bind to 127.0.0.1**: Not 0.0.0.0 (tenement handles external access)
 
 ## Next Steps
 
-- [Configuration Reference](/guides/03-configuration) - Full TOML config options
-- [Production Deployment](/guides/04-production) - TLS, systemd, and Caddy setup
-- [Use Cases](/use-cases/01-multitenant) - Real-world examples
+- [Configuration Reference](/guides/03-configuration) - Full config options
+- [Production Deployment](/guides/04-production) - TLS and systemd setup
+- [Deployment Patterns](/guides/05-deployments) - Blue-green and canary
+- [Economics](/intro/02-economics) - Why tenement saves money

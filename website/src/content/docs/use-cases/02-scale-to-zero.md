@@ -28,16 +28,17 @@ def work():
     return {"result": expensive_computation()}
 
 if __name__ == "__main__":
-    app.run(unix_socket=os.getenv("SOCKET_PATH"))
+    port = int(os.getenv("PORT", "8000"))
+    app.run(host="127.0.0.1", port=port)
 ```
 
 **2. Configure tenement with idle timeout**
 ```toml
 [service.worker]
 command = "python app.py"
-socket = "/tmp/worker-{id}.sock"
 health = "/health"
 idle_timeout = 300              # Stop after 5 minutes idle
+# Note: PORT env var is automatically set by tenement
 ```
 
 When idle_timeout expires:
@@ -48,7 +49,7 @@ When idle_timeout expires:
 
 **3. Spawn per job/request**
 ```bash
-tenement spawn worker --id job123
+ten spawn worker --id job123
 ```
 
 **4. Wake on request**
@@ -63,7 +64,7 @@ job123.api.example.com → socket missing → spawn worker:job123 → route
 - **Zero cost when idle** - Stopped services use no memory or CPU
 - **Instant wake** - First request spawns in <200ms (imperceptible)
 - **No app changes** - Service code has zero hibernation logic
-- **Simple scaling** - Just: `tenement spawn worker --id $job_id`
+- **Simple scaling** - Just: `ten spawn worker --id $job_id`
 
 ## Economics
 
