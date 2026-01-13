@@ -518,7 +518,37 @@ ten caddy --domain example.com --install --systemd
 # - *.example.com routes to tenement instances
 ```
 
-### Phase 9: Slum - Multi-Provider Orchestration (v0.9)
+### Phase 9: Deployment Tooling (v0.9) - IN PROGRESS
+
+Weighted routing, blue/green deployments, and canary releases.
+
+**Session 1: Weighted Routing - DONE**
+- [x] Add `weight` field to Instance (0-100, default 100)
+- [x] Weighted random selection in router (`select_weighted`)
+- [x] `ten weight api:v2 50` CLI command
+- [x] `ten ps` shows weight column
+- [x] Support both routing patterns:
+  - `{id}.{process}.{domain}` → direct route to instance
+  - `{process}.{domain}` → weighted route across instances
+- [x] Weight 0 excludes instance from traffic
+- [x] 11 new tests for weighted routing
+
+**Session 2: Deploy Commands - TODO**
+- [ ] `ten deploy api --version v2` - spawn + wait healthy
+- [ ] `ten route api --from v1 --to v2` - atomic swap
+- [ ] Instance version tagging
+
+**Session 3: Slum Health Loop - TODO**
+- [ ] Background health check polling
+- [ ] Auto-update server status
+- [ ] Optional webhook on prolonged failure
+
+**Session 4: Polish + Docs - TODO**
+- [ ] CLI help improvements
+- [ ] Deployment guide
+- [ ] Example configs
+
+### Phase 10: Slum - Multi-Provider Orchestration (v1.0)
 
 Fleet orchestration across multiple tenements on different providers.
 

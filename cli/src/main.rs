@@ -53,6 +53,13 @@ enum Commands {
         /// Instance identifier (process:id)
         instance: String,
     },
+    /// Set traffic weight for an instance (0-100)
+    Weight {
+        /// Instance identifier (process:id)
+        instance: String,
+        /// Traffic weight (0-100, default 100)
+        weight: u8,
+    },
     /// Show config
     Config,
     /// Generate a new API token
@@ -136,16 +143,17 @@ async fn main() -> Result<()> {
                 println!("No running instances");
             } else {
                 println!(
-                    "{:<20} {:<30} {:<10} {:<10}",
-                    "INSTANCE", "SOCKET", "UPTIME", "HEALTH"
+                    "{:<20} {:<30} {:<10} {:<10} {:<6}",
+                    "INSTANCE", "SOCKET", "UPTIME", "HEALTH", "WEIGHT"
                 );
                 for info in instances {
                     println!(
-                        "{:<20} {:<30} {:<10} {:<10}",
+                        "{:<20} {:<30} {:<10} {:<10} {:<6}",
                         info.id.to_string(),
                         info.socket.display(),
                         format_uptime(info.uptime_secs),
-                        info.health.to_string()
+                        info.health.to_string(),
+                        info.weight
                     );
                 }
             }
@@ -155,6 +163,16 @@ async fn main() -> Result<()> {
             let hypervisor = Hypervisor::from_config_file()?;
             let status = hypervisor.check_health(&process, &id).await;
             println!("{}: {}", instance, status);
+        }
+        Commands::Weight { instance, weight } => {
+            let (process, id) = parse_instance(&instance)?;
+            let hypervisor = Hypervisor::from_config_file()?;
+            // Need to spawn first if not running
+            if !hypervisor.is_running(&process, &id).await {
+                anyhow::bail!("Instance {} is not running", instance);
+            }
+            hypervisor.set_weight(&process, &id, weight).await?;
+            println!("Set {} weight to {}", instance, weight);
         }
         Commands::Config => {
             let config = Config::load()?;

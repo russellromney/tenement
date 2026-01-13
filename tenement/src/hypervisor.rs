@@ -280,6 +280,7 @@ impl Hypervisor {
             storage_persist: process_config.storage_persist,
             storage_used_bytes: 0,
             data_dir: instance_data_dir.clone(),
+            weight: 100, // Default weight - receives full traffic
         };
 
         {
@@ -686,6 +687,71 @@ impl Hypervisor {
         if let Some(instance) = instances.get_mut(&instance_id) {
             instance.touch();
         }
+    }
+
+    /// Set the traffic weight for an instance (0-100).
+    /// Weight 0 means the instance receives no traffic.
+    /// Weight 100 is the default and means full traffic.
+    /// Returns Err if the instance is not found.
+    pub async fn set_weight(&self, process_name: &str, id: &str, weight: u8) -> Result<()> {
+        let instance_id = InstanceId::new(process_name, id);
+        let mut instances = self.instances.write().await;
+        if let Some(instance) = instances.get_mut(&instance_id) {
+            instance.weight = weight.min(100); // Cap at 100
+            info!("Set weight for {} to {}", instance_id, instance.weight);
+            Ok(())
+        } else {
+            anyhow::bail!("Instance not found: {}", instance_id)
+        }
+    }
+
+    /// List all running instances for a specific process.
+    /// Used for weighted load balancing across multiple instances.
+    pub async fn list_by_process(&self, process_name: &str) -> Vec<InstanceInfo> {
+        let instances = self.instances.read().await;
+        instances
+            .values()
+            .filter(|i| i.id.process == process_name)
+            .map(|i| i.info())
+            .collect()
+    }
+
+    /// Select an instance for a process using weighted random selection.
+    /// Returns None if no instances are available or all have weight 0.
+    pub async fn select_weighted(&self, process_name: &str) -> Option<InstanceInfo> {
+        use rand::Rng;
+
+        let instances = self.instances.read().await;
+        let candidates: Vec<_> = instances
+            .values()
+            .filter(|i| i.id.process == process_name && i.weight > 0)
+            .collect();
+
+        if candidates.is_empty() {
+            return None;
+        }
+
+        // Calculate total weight
+        let total_weight: u32 = candidates.iter().map(|i| i.weight as u32).sum();
+        if total_weight == 0 {
+            return None;
+        }
+
+        // Pick a random point in the weight space
+        let mut rng = rand::thread_rng();
+        let point = rng.gen_range(0..total_weight);
+
+        // Find the instance at that point
+        let mut cumulative = 0u32;
+        for instance in candidates {
+            cumulative += instance.weight as u32;
+            if point < cumulative {
+                return Some(instance.info());
+            }
+        }
+
+        // Fallback (shouldn't happen)
+        None
     }
 
     /// Stop idle instances that have exceeded their idle_timeout.
@@ -1621,5 +1687,210 @@ sleep 30
         assert!(!hypervisor.is_running("broken", "test").await);
 
         hypervisor.stop("api", "prod").await.ok();
+    }
+
+    // ===================
+    // WEIGHTED ROUTING TESTS
+    // ===================
+
+    #[tokio::test]
+    async fn test_set_weight() {
+        let dir = TempDir::new().unwrap();
+        let script = create_touch_socket_script(dir.path());
+
+        let config = test_config_with_process("api", script.to_str().unwrap(), vec![]);
+        let hypervisor = Hypervisor::new(config);
+
+        hypervisor.spawn("api", "test").await.unwrap();
+
+        // Default weight should be 100
+        let info = hypervisor.get("api", "test").await.unwrap();
+        assert_eq!(info.weight, 100);
+
+        // Set weight to 50
+        hypervisor.set_weight("api", "test", 50).await.unwrap();
+        let info = hypervisor.get("api", "test").await.unwrap();
+        assert_eq!(info.weight, 50);
+
+        // Set weight to 0
+        hypervisor.set_weight("api", "test", 0).await.unwrap();
+        let info = hypervisor.get("api", "test").await.unwrap();
+        assert_eq!(info.weight, 0);
+
+        hypervisor.stop("api", "test").await.ok();
+    }
+
+    #[tokio::test]
+    async fn test_set_weight_caps_at_100() {
+        let dir = TempDir::new().unwrap();
+        let script = create_touch_socket_script(dir.path());
+
+        let config = test_config_with_process("api", script.to_str().unwrap(), vec![]);
+        let hypervisor = Hypervisor::new(config);
+
+        hypervisor.spawn("api", "test").await.unwrap();
+
+        // Try to set weight > 100
+        hypervisor.set_weight("api", "test", 150).await.unwrap();
+        let info = hypervisor.get("api", "test").await.unwrap();
+        assert_eq!(info.weight, 100); // Should be capped at 100
+
+        hypervisor.stop("api", "test").await.ok();
+    }
+
+    #[tokio::test]
+    async fn test_set_weight_nonexistent_instance() {
+        let config = Config::default();
+        let hypervisor = Hypervisor::new(config);
+
+        let result = hypervisor.set_weight("api", "nonexistent", 50).await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("not found"));
+    }
+
+    #[tokio::test]
+    async fn test_list_by_process() {
+        let dir = TempDir::new().unwrap();
+        let script = create_touch_socket_script(dir.path());
+
+        let config = test_config_with_process("api", script.to_str().unwrap(), vec![]);
+        let hypervisor = Hypervisor::new(config);
+
+        // Spawn multiple instances
+        hypervisor.spawn("api", "prod").await.unwrap();
+        hypervisor.spawn("api", "staging").await.unwrap();
+
+        let instances = hypervisor.list_by_process("api").await;
+        assert_eq!(instances.len(), 2);
+
+        // Verify both are present
+        let ids: Vec<String> = instances.iter().map(|i| i.id.id.clone()).collect();
+        assert!(ids.contains(&"prod".to_string()));
+        assert!(ids.contains(&"staging".to_string()));
+
+        // Nonexistent process should return empty
+        let empty = hypervisor.list_by_process("nonexistent").await;
+        assert!(empty.is_empty());
+
+        hypervisor.stop("api", "prod").await.ok();
+        hypervisor.stop("api", "staging").await.ok();
+    }
+
+    #[tokio::test]
+    async fn test_select_weighted_single_instance() {
+        let dir = TempDir::new().unwrap();
+        let script = create_touch_socket_script(dir.path());
+
+        let config = test_config_with_process("api", script.to_str().unwrap(), vec![]);
+        let hypervisor = Hypervisor::new(config);
+
+        hypervisor.spawn("api", "prod").await.unwrap();
+
+        // Single instance should always be selected
+        for _ in 0..10 {
+            let selected = hypervisor.select_weighted("api").await;
+            assert!(selected.is_some());
+            assert_eq!(selected.unwrap().id.id, "prod");
+        }
+
+        hypervisor.stop("api", "prod").await.ok();
+    }
+
+    #[tokio::test]
+    async fn test_select_weighted_excludes_zero_weight() {
+        let dir = TempDir::new().unwrap();
+        let script = create_touch_socket_script(dir.path());
+
+        let config = test_config_with_process("api", script.to_str().unwrap(), vec![]);
+        let hypervisor = Hypervisor::new(config);
+
+        hypervisor.spawn("api", "v1").await.unwrap();
+        hypervisor.spawn("api", "v2").await.unwrap();
+
+        // Set v1 weight to 0
+        hypervisor.set_weight("api", "v1", 0).await.unwrap();
+
+        // v2 should always be selected since v1 has weight 0
+        for _ in 0..10 {
+            let selected = hypervisor.select_weighted("api").await;
+            assert!(selected.is_some());
+            assert_eq!(selected.unwrap().id.id, "v2");
+        }
+
+        hypervisor.stop("api", "v1").await.ok();
+        hypervisor.stop("api", "v2").await.ok();
+    }
+
+    #[tokio::test]
+    async fn test_select_weighted_all_zero_weight() {
+        let dir = TempDir::new().unwrap();
+        let script = create_touch_socket_script(dir.path());
+
+        let config = test_config_with_process("api", script.to_str().unwrap(), vec![]);
+        let hypervisor = Hypervisor::new(config);
+
+        hypervisor.spawn("api", "v1").await.unwrap();
+        hypervisor.spawn("api", "v2").await.unwrap();
+
+        // Set both weights to 0
+        hypervisor.set_weight("api", "v1", 0).await.unwrap();
+        hypervisor.set_weight("api", "v2", 0).await.unwrap();
+
+        // No instance should be selected
+        let selected = hypervisor.select_weighted("api").await;
+        assert!(selected.is_none());
+
+        hypervisor.stop("api", "v1").await.ok();
+        hypervisor.stop("api", "v2").await.ok();
+    }
+
+    #[tokio::test]
+    async fn test_select_weighted_no_instances() {
+        let config = Config::default();
+        let hypervisor = Hypervisor::new(config);
+
+        // No instances -> None
+        let selected = hypervisor.select_weighted("api").await;
+        assert!(selected.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_select_weighted_distribution() {
+        // Test that weighted selection roughly follows the weights
+        let dir = TempDir::new().unwrap();
+        let script = create_touch_socket_script(dir.path());
+
+        let config = test_config_with_process("api", script.to_str().unwrap(), vec![]);
+        let hypervisor = Hypervisor::new(config);
+
+        hypervisor.spawn("api", "v1").await.unwrap();
+        hypervisor.spawn("api", "v2").await.unwrap();
+
+        // Set v1=90, v2=10
+        hypervisor.set_weight("api", "v1", 90).await.unwrap();
+        hypervisor.set_weight("api", "v2", 10).await.unwrap();
+
+        let mut v1_count = 0;
+        let mut v2_count = 0;
+        let iterations = 1000;
+
+        for _ in 0..iterations {
+            if let Some(selected) = hypervisor.select_weighted("api").await {
+                match selected.id.id.as_str() {
+                    "v1" => v1_count += 1,
+                    "v2" => v2_count += 1,
+                    _ => panic!("Unexpected instance"),
+                }
+            }
+        }
+
+        // v1 should get roughly 90% of selections (with some variance)
+        // Allow 15% margin for statistical variance
+        let v1_ratio = v1_count as f64 / iterations as f64;
+        assert!(v1_ratio > 0.75, "v1 ratio {} should be > 0.75", v1_ratio);
+        assert!(v1_ratio < 0.98, "v1 ratio {} should be < 0.98", v1_ratio);
+
+        hypervisor.stop("api", "v1").await.ok();
+        hypervisor.stop("api", "v2").await.ok();
     }
 }

@@ -74,7 +74,7 @@ async fn auth_middleware(
         .get("host")
         .and_then(|h| h.to_str().ok())
         .unwrap_or("");
-    if parse_subdomain(host, &state.domain).is_some() {
+    if matches!(parse_subdomain(host, &state.domain), Some(_)) {
         return Ok(next.run(req).await);
     }
 
@@ -192,6 +192,7 @@ async fn list_instances(State(state): State<AppState>) -> impl IntoResponse {
             health: i.health.to_string(),
             storage_used_bytes: i.storage_used_bytes,
             storage_quota_bytes: i.storage_quota_bytes,
+            weight: i.weight,
         })
         .collect();
     Json(response)
@@ -206,6 +207,7 @@ struct InstanceInfo {
     health: String,
     storage_used_bytes: u64,
     storage_quota_bytes: Option<u64>,
+    weight: u8,
 }
 
 /// Get storage info for a specific instance
@@ -340,9 +342,16 @@ async fn handle_request(
     State(state): State<AppState>,
     req: Request<Body>,
 ) -> Response {
-    // Parse subdomain pattern: {id}.{process}.{domain}
+    // Parse subdomain pattern
     match parse_subdomain(&host, &state.domain) {
-        Some((process, id)) => proxy_to_instance(&state, &process, &id, req).await,
+        Some(SubdomainRoute::Direct { process, id }) => {
+            // Direct route to specific instance: {id}.{process}.{domain}
+            proxy_to_instance(&state, &process, Some(&id), req).await
+        }
+        Some(SubdomainRoute::Weighted { process }) => {
+            // Weighted route across instances: {process}.{domain}
+            proxy_to_instance(&state, &process, None, req).await
+        }
         None => {
             // No subdomain or invalid pattern - serve dashboard
             // For now just return 404 for non-dashboard routes
@@ -351,8 +360,18 @@ async fn handle_request(
     }
 }
 
-/// Parse subdomain pattern: {id}.{process}.{domain} -> Some((process, id))
-fn parse_subdomain(host: &str, domain: &str) -> Option<(String, String)> {
+/// Subdomain routing types
+enum SubdomainRoute {
+    /// Direct route to a specific instance: {id}.{process}.{domain}
+    Direct { process: String, id: String },
+    /// Weighted route across all instances of a process: {process}.{domain}
+    Weighted { process: String },
+}
+
+/// Parse subdomain pattern:
+/// - {id}.{process}.{domain} -> Direct route to specific instance
+/// - {process}.{domain} -> Weighted route across all instances
+fn parse_subdomain(host: &str, domain: &str) -> Option<SubdomainRoute> {
     // Strip port if present
     let host = host.split(':').next().unwrap_or(host);
 
@@ -363,59 +382,92 @@ fn parse_subdomain(host: &str, domain: &str) -> Option<(String, String)> {
 
     // Get subdomain part
     let subdomain = host.strip_suffix(domain)?.strip_suffix('.')?;
+    if subdomain.is_empty() {
+        return None;
+    }
 
-    // Split into parts: id.process
+    // Split into parts: could be "id.process" or just "process"
     let parts: Vec<&str> = subdomain.splitn(2, '.').collect();
-    if parts.len() != 2 {
-        return None;
+
+    match parts.len() {
+        1 => {
+            // Single part: {process}.{domain} -> weighted routing
+            let process = parts[0].to_string();
+            if process.is_empty() {
+                return None;
+            }
+            Some(SubdomainRoute::Weighted { process })
+        }
+        2 => {
+            // Two parts: {id}.{process}.{domain} -> direct routing
+            let id = parts[0].to_string();
+            let process = parts[1].to_string();
+            if id.is_empty() || process.is_empty() {
+                return None;
+            }
+            Some(SubdomainRoute::Direct { process, id })
+        }
+        _ => None,
     }
-
-    let id = parts[0].to_string();
-    let process = parts[1].to_string();
-
-    if id.is_empty() || process.is_empty() {
-        return None;
-    }
-
-    Some((process, id))
 }
 
 /// Proxy request to a process instance via unix socket
+///
+/// If `id` is Some, routes directly to that specific instance.
+/// If `id` is None, uses weighted random selection across all instances.
 ///
 /// Implements wake-on-request: if the instance is not running but the process
 /// is configured, it will spawn the instance and wait for it to be ready.
 async fn proxy_to_instance(
     state: &AppState,
     process: &str,
-    id: &str,
+    id: Option<&str>,
     req: Request<Body>,
 ) -> Response {
-    // Use atomic get-and-touch to prevent race condition where instance
-    // could be reaped between checking if running and touching activity.
-    let socket_path = match state.hypervisor.get_and_touch(process, id).await {
-        Some(info) => {
-            // Instance is running - activity already touched
-            info.socket
+    // Check if process is configured first
+    if !state.hypervisor.has_process(process) {
+        return (
+            StatusCode::NOT_FOUND,
+            format!("Process '{}' not configured", process),
+        )
+            .into_response();
+    }
+
+    let socket_path = match id {
+        Some(instance_id) => {
+            // Direct routing to specific instance
+            match state.hypervisor.get_and_touch(process, instance_id).await {
+                Some(info) => info.socket,
+                None => {
+                    // Wake-on-request: spawn and wait for instance to be ready
+                    tracing::info!("Waking instance {}:{}", process, instance_id);
+                    match state.hypervisor.spawn_and_wait(process, instance_id).await {
+                        Ok(socket) => socket,
+                        Err(e) => {
+                            tracing::error!("Failed to wake instance {}:{}: {}", process, instance_id, e);
+                            return (
+                                StatusCode::SERVICE_UNAVAILABLE,
+                                format!("Failed to start instance: {}", e),
+                            )
+                                .into_response();
+                        }
+                    }
+                }
+            }
         }
         None => {
-            // Instance not running - check if process is configured
-            if !state.hypervisor.has_process(process) {
-                return (
-                    StatusCode::NOT_FOUND,
-                    format!("Process '{}' not configured", process),
-                )
-                    .into_response();
-            }
-
-            // Wake-on-request: spawn and wait for instance to be ready
-            tracing::info!("Waking instance {}:{}", process, id);
-            match state.hypervisor.spawn_and_wait(process, id).await {
-                Ok(socket) => socket,
-                Err(e) => {
-                    tracing::error!("Failed to wake instance {}:{}: {}", process, id, e);
+            // Weighted routing across all instances
+            match state.hypervisor.select_weighted(process).await {
+                Some(info) => {
+                    // Touch activity for the selected instance
+                    state.hypervisor.touch_activity(process, &info.id.id).await;
+                    info.socket
+                }
+                None => {
+                    // No instances available - return 503
                     return (
                         StatusCode::SERVICE_UNAVAILABLE,
-                        format!("Failed to start instance: {}", e),
+                        format!("No instances available for process '{}'", process),
                     )
                         .into_response();
                 }
@@ -490,25 +542,47 @@ mod tests {
 
     #[test]
     fn test_parse_subdomain() {
-        // Valid patterns
-        assert_eq!(
-            parse_subdomain("prod.api.example.com", "example.com"),
-            Some(("api".to_string(), "prod".to_string()))
-        );
-        assert_eq!(
-            parse_subdomain("user123.app.example.com", "example.com"),
-            Some(("app".to_string(), "user123".to_string()))
-        );
-        assert_eq!(
-            parse_subdomain("staging.web.example.com:8080", "example.com"),
-            Some(("web".to_string(), "staging".to_string()))
-        );
+        // Direct routing patterns: {id}.{process}.{domain}
+        match parse_subdomain("prod.api.example.com", "example.com") {
+            Some(SubdomainRoute::Direct { process, id }) => {
+                assert_eq!(process, "api");
+                assert_eq!(id, "prod");
+            }
+            _ => panic!("Expected Direct route"),
+        }
+        match parse_subdomain("user123.app.example.com", "example.com") {
+            Some(SubdomainRoute::Direct { process, id }) => {
+                assert_eq!(process, "app");
+                assert_eq!(id, "user123");
+            }
+            _ => panic!("Expected Direct route"),
+        }
+        match parse_subdomain("staging.web.example.com:8080", "example.com") {
+            Some(SubdomainRoute::Direct { process, id }) => {
+                assert_eq!(process, "web");
+                assert_eq!(id, "staging");
+            }
+            _ => panic!("Expected Direct route"),
+        }
+
+        // Weighted routing patterns: {process}.{domain}
+        match parse_subdomain("api.example.com", "example.com") {
+            Some(SubdomainRoute::Weighted { process }) => {
+                assert_eq!(process, "api");
+            }
+            _ => panic!("Expected Weighted route"),
+        }
+        match parse_subdomain("web.example.com:8080", "example.com") {
+            Some(SubdomainRoute::Weighted { process }) => {
+                assert_eq!(process, "web");
+            }
+            _ => panic!("Expected Weighted route"),
+        }
 
         // Invalid patterns
-        assert_eq!(parse_subdomain("example.com", "example.com"), None);
-        assert_eq!(parse_subdomain("api.example.com", "example.com"), None);
-        assert_eq!(parse_subdomain("other.com", "example.com"), None);
-        assert_eq!(parse_subdomain("", "example.com"), None);
+        assert!(parse_subdomain("example.com", "example.com").is_none());
+        assert!(parse_subdomain("other.com", "example.com").is_none());
+        assert!(parse_subdomain("", "example.com").is_none());
     }
 
     /// Create test state with auth token

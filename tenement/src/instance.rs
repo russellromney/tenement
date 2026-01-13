@@ -108,6 +108,9 @@ pub struct Instance {
     pub storage_used_bytes: u64,
     /// Path to the instance's data directory
     pub data_dir: PathBuf,
+    /// Traffic weight for load balancing (0-100, default 100)
+    /// Weight 0 means instance receives no traffic
+    pub weight: u8,
 }
 
 /// Instance info for display (serializable)
@@ -130,6 +133,8 @@ pub struct InstanceInfo {
     pub storage_quota_bytes: Option<u64>,
     /// Path to instance data directory
     pub data_dir: PathBuf,
+    /// Traffic weight for load balancing (0-100)
+    pub weight: u8,
 }
 
 use std::time::Duration;
@@ -149,6 +154,7 @@ impl Instance {
             storage_used_bytes: self.storage_used_bytes,
             storage_quota_bytes: self.storage_quota_mb.map(|mb| (mb as u64) * 1024 * 1024),
             data_dir: self.data_dir.clone(),
+            weight: self.weight,
         }
     }
 
@@ -481,6 +487,7 @@ mod tests {
             storage_used_bytes: 134217728,
             storage_quota_bytes: Some(536870912),
             data_dir: PathBuf::from("/data/api/user1"),
+            weight: 100,
         };
 
         let json = serde_json::to_string(&info).unwrap();
@@ -498,6 +505,7 @@ mod tests {
         assert_eq!(deserialized.health, HealthStatus::Healthy);
         assert_eq!(deserialized.storage_used_bytes, 134217728);
         assert_eq!(deserialized.storage_quota_bytes, Some(536870912));
+        assert_eq!(deserialized.weight, 100);
     }
 
     #[test]
@@ -515,6 +523,7 @@ mod tests {
             storage_used_bytes: 0,
             storage_quota_bytes: None,
             data_dir: PathBuf::from("/data/api/user1"),
+            weight: 100,
         };
 
         let json = serde_json::to_string(&info).unwrap();
@@ -703,6 +712,7 @@ mod tests {
             storage_used_bytes: 1024,
             storage_quota_bytes: Some(2048),
             data_dir: PathBuf::from("/data/api/user1"),
+            weight: 100,
         };
 
         let cloned = info.clone();
@@ -712,6 +722,7 @@ mod tests {
         assert_eq!(info.health, cloned.health);
         assert_eq!(info.storage_used_bytes, cloned.storage_used_bytes);
         assert_eq!(info.storage_quota_bytes, cloned.storage_quota_bytes);
+        assert_eq!(info.weight, cloned.weight);
     }
 
     #[test]
@@ -729,6 +740,7 @@ mod tests {
             storage_used_bytes: 0,
             storage_quota_bytes: None,
             data_dir: PathBuf::from("/data/api/user1"),
+            weight: 100,
         };
 
         let debug = format!("{:?}", info);
@@ -755,6 +767,7 @@ mod tests {
             storage_used_bytes: 1024 * 1024 * 100, // 100MB
             storage_quota_bytes: None, // No quota
             data_dir: PathBuf::from("/data/api/user1"),
+            weight: 100,
         };
 
         assert_eq!(info.storage_used_bytes, 104857600);
@@ -776,9 +789,60 @@ mod tests {
             storage_used_bytes: 134217728, // 128MB
             storage_quota_bytes: Some(536870912), // 512MB
             data_dir: PathBuf::from("/data/api/user1"),
+            weight: 100,
         };
 
         assert_eq!(info.storage_used_bytes, 134217728);
         assert_eq!(info.storage_quota_bytes, Some(536870912));
+    }
+
+    // ===================
+    // WEIGHT TESTS
+    // ===================
+
+    #[test]
+    fn test_instance_info_weight() {
+        let info = InstanceInfo {
+            id: InstanceId::new("api", "user1"),
+            runtime: RuntimeType::Process,
+            socket: PathBuf::from("/tmp/test.sock"),
+            uptime_secs: 100,
+            restarts: 0,
+            health: HealthStatus::Healthy,
+            status: InstanceStatus::Running,
+            idle_secs: 0,
+            idle_timeout: None,
+            storage_used_bytes: 0,
+            storage_quota_bytes: None,
+            data_dir: PathBuf::from("/data/api/user1"),
+            weight: 50,
+        };
+
+        assert_eq!(info.weight, 50);
+    }
+
+    #[test]
+    fn test_instance_info_weight_serialization() {
+        let info = InstanceInfo {
+            id: InstanceId::new("api", "user1"),
+            runtime: RuntimeType::Process,
+            socket: PathBuf::from("/tmp/test.sock"),
+            uptime_secs: 100,
+            restarts: 0,
+            health: HealthStatus::Healthy,
+            status: InstanceStatus::Running,
+            idle_secs: 0,
+            idle_timeout: None,
+            storage_used_bytes: 0,
+            storage_quota_bytes: None,
+            data_dir: PathBuf::from("/data/api/user1"),
+            weight: 75,
+        };
+
+        let json = serde_json::to_string(&info).unwrap();
+        assert!(json.contains("\"weight\":75"));
+
+        let deserialized: InstanceInfo = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.weight, 75);
     }
 }

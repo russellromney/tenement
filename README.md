@@ -24,6 +24,7 @@ Your apps don't need a penthouse - a roof, some supervision, and the occasional 
 
 - Process supervision with auto-restart
 - Subdomain routing (`prod.api.example.com` → `api:prod`)
+- Weighted load balancing for canary/blue-green deployments
 - Built-in dashboard (Svelte)
 - Prometheus metrics at `/metrics`
 - Log capture with full-text search
@@ -60,7 +61,8 @@ Bring your own environment. Use `uv`, `bun`, `deno`, or a compiled binary. No sh
 ten serve              # Open for business
 ten spawn api --id prod # Move in a tenant
 ten stop api:prod      # Eviction
-ten ps                 # Census
+ten ps                 # Census (shows weight column)
+ten weight api:prod 50 # Set traffic weight (0-100)
 ten token-gen          # New keys
 ten install            # Install as systemd service
 ten caddy              # Generate Caddyfile for HTTPS
@@ -69,10 +71,13 @@ ten caddy              # Generate Caddyfile for HTTPS
 ## Routing
 
 ```
-prod.api.example.com   → api:prod
-staging.web.example.com → web:staging
+prod.api.example.com   → api:prod (direct routing)
+staging.web.example.com → web:staging (direct routing)
+api.example.com        → weighted routing across all api instances
 example.com            → dashboard (the lobby)
 ```
+
+**Weighted routing:** Requests to `{process}.{domain}` are load-balanced across all instances using weighted random selection. Set weights with `ten weight api:v1 90` for canary deployments.
 
 ## API
 
@@ -288,9 +293,15 @@ See [ROADMAP.md](ROADMAP.md) for the full isolation spectrum vision.
   - `ten uninstall` - Clean removal of systemd service
   - `ten caddy` - Generate Caddyfile with automatic HTTPS via Let's Encrypt
   - Supports `--dry-run`, `--install` (install Caddy), `--systemd` (enable service)
+- Weighted routing for canary/blue-green deployments
+  - `ten weight api:v2 50` - Set instance traffic weight (0-100)
+  - Requests to `{process}.{domain}` load-balanced by weight
+  - Weight 0 excludes instance from traffic
+  - `ten ps` shows weight column
 
 **Next up:**
-- Cgroup lifecycle tests (Session 5) - Linux-only cgroup verification
+- Deploy commands (`ten deploy`, `ten route`) for blue/green deployments
+- Slum health check loop
 - WASM runtime (wasmtime) - Lightweight compute sandbox
 
 ## License

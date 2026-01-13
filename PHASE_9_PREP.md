@@ -66,9 +66,9 @@ Most apps never need more than row 2.
 - ✅ Multiple instances per service
 - ✅ Health checks per instance
 - ✅ Metrics per instance
-- ❌ Weighted routing
-- ❌ Blue/green commands
-- ❌ Canary commands
+- ✅ Weighted routing (`ten weight`, `select_weighted`)
+- ❌ Blue/green commands (`ten deploy`, `ten route`)
+- ❌ Canary commands (uses weighted routing)
 
 ---
 
@@ -141,10 +141,15 @@ These are either platform concerns or SaaS concerns.
 
 ## Implementation Plan
 
-**Session 1: Weighted Routing**
-- Add weight field to instances
-- Implement weighted selection in proxy
-- Tests for traffic distribution
+**Session 1: Weighted Routing - DONE**
+- [x] Add weight field to instances (0-100, default 100)
+- [x] Implement weighted selection in proxy (`select_weighted`)
+- [x] `ten weight api:v2 50` CLI command
+- [x] `ten ps` shows weight column
+- [x] Support both routing patterns:
+  - `{id}.{process}.{domain}` → direct route
+  - `{process}.{domain}` → weighted route
+- [x] 11 tests for traffic distribution
 
 **Session 2: Deploy Commands**
 - `ten deploy` - spawn + wait healthy

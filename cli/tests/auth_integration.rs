@@ -474,15 +474,17 @@ async fn test_subdomain_with_different_patterns() {
 }
 
 #[tokio::test]
-async fn test_invalid_subdomain_requires_auth() {
+async fn test_root_domain_requires_auth() {
     let (server, _token, _dir) = setup_simple().await;
 
-    // Single-level subdomain is not valid pattern, should require auth for API paths
+    // Single-level subdomain is now valid for weighted routing (bypasses auth)
+    // api.example.com routes to process "api" via weighted selection
     let response = server
         .get("/api/instances")
         .add_header("Host", "api.example.com")
         .await;
-    response.assert_status_unauthorized();
+    // Weighted routing to unconfigured process returns 404, not 401
+    response.assert_status_not_found();
 
     // Root domain requires auth for API paths
     let response = server
