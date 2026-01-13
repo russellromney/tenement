@@ -16,7 +16,7 @@ use axum::{
 use futures::stream::Stream;
 use hyper_util::{client::legacy::Client, rt::TokioExecutor};
 use hyperlocal::UnixConnector;
-use rustls_acme::{caches::DirCache, AcmeConfig, UseChallenge::Http01};
+use rustls_acme::{caches::DirCache, AcmeConfig};
 use serde::{Deserialize, Serialize};
 use std::convert::Infallible;
 use std::net::SocketAddr;
@@ -61,11 +61,49 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/logs/stream", get(stream_logs))
         // Dashboard static assets
         .route("/assets/*path", get(dashboard_asset))
-        // Fallback handles subdomain routing
+        // Fallback handles subdomain routing (for non-subdomain 404s)
         .fallback(handle_request)
+        // Middleware layers are applied inside-out:
+        // - TraceLayer runs first (outermost)
+        // - subdomain_middleware runs second (intercepts subdomains before auth)
+        // - auth_middleware runs last for non-subdomain requests
         .layer(middleware::from_fn_with_state(state.clone(), auth_middleware))
+        .layer(middleware::from_fn_with_state(state.clone(), subdomain_middleware))
         .layer(TraceLayer::new_for_http())
         .with_state(state)
+}
+
+/// Subdomain routing middleware - intercepts subdomain requests before routes match
+///
+/// This middleware runs first (outermost layer) and handles subdomain routing
+/// by proxying requests directly to the appropriate process instance.
+/// Non-subdomain requests continue to the normal route handlers.
+async fn subdomain_middleware(
+    State(state): State<AppState>,
+    req: Request<Body>,
+    next: Next,
+) -> Response {
+    let host = req
+        .headers()
+        .get("host")
+        .and_then(|h| h.to_str().ok())
+        .unwrap_or("");
+
+    // Check if this is a subdomain request
+    match parse_subdomain(host, &state.domain) {
+        Some(SubdomainRoute::Direct { process, id }) => {
+            // Direct route to specific instance: {id}.{process}.{domain}
+            proxy_to_instance(&state, &process, Some(&id), req).await
+        }
+        Some(SubdomainRoute::Weighted { process }) => {
+            // Weighted route across instances: {process}.{domain}
+            proxy_to_instance(&state, &process, None, req).await
+        }
+        None => {
+            // Not a subdomain request - continue to normal routes
+            next.run(req).await
+        }
+    }
 }
 
 /// Auth middleware - requires Bearer token for API endpoints
@@ -81,16 +119,8 @@ async fn auth_middleware(
         return Ok(next.run(req).await);
     }
 
-    // Skip auth for subdomain requests (they go through the fallback handler)
-    // The fallback handler will handle any subdomain-specific auth if needed
-    let host = req
-        .headers()
-        .get("host")
-        .and_then(|h| h.to_str().ok())
-        .unwrap_or("");
-    if matches!(parse_subdomain(host, &state.domain), Some(_)) {
-        return Ok(next.run(req).await);
-    }
+    // Subdomain requests are handled by subdomain_middleware before reaching here
+    // so we don't need to check for subdomains in auth
 
     // Extract token from Authorization header
     let auth_header = req
@@ -176,23 +206,22 @@ async fn serve_http_only(state: AppState, port: u16) -> Result<()> {
 }
 
 /// HTTPS server with automatic Let's Encrypt certificates
+/// Uses TLS-ALPN-01 challenge (default in rustls-acme) - handles everything on port 443
 async fn serve_with_tls(state: AppState, tls: TlsOptions) -> Result<()> {
     // Ensure cache directory exists
     std::fs::create_dir_all(&tls.cache_dir)?;
 
-    // Create ACME configuration with HTTP-01 challenge type
+    // Create ACME configuration - uses TLS-ALPN-01 by default
+    // TLS-ALPN-01 handles challenges on port 443, no separate port 80 listener needed
+    let cache_dir = tls.cache_dir.clone();
     let mut acme_state = AcmeConfig::new([tls.domain.clone()])
         .contact([format!("mailto:{}", tls.email)])
-        .cache(DirCache::new(&tls.cache_dir))
+        .cache(DirCache::new(cache_dir))
         .directory_lets_encrypt(!tls.staging) // true = production, false = staging
-        .challenge_type(Http01)
         .state();
 
-    // Get acceptor for TLS connections
+    // Get acceptor for TLS connections (includes ACME challenge handling)
     let acceptor = acme_state.axum_acceptor(acme_state.default_rustls_config());
-
-    // Get HTTP-01 challenge service for port 80
-    let challenge_service = acme_state.http01_challenge_tower_service();
 
     // Spawn ACME event handler (handles cert acquisition/renewal)
     tokio::spawn(async move {
@@ -209,13 +238,13 @@ async fn serve_with_tls(state: AppState, tls: TlsOptions) -> Result<()> {
         }
     });
 
-    // Create HTTP server for port 80 (ACME challenges + redirect)
+    // Spawn HTTP redirect server on port 80
     let https_port = tls.https_port;
     let http_port = tls.http_port;
 
     let http_server = tokio::spawn(async move {
-        if let Err(e) = serve_http_with_challenges(http_port, https_port, challenge_service).await {
-            tracing::error!("HTTP server error: {}", e);
+        if let Err(e) = serve_http_redirect(http_port, https_port).await {
+            tracing::error!("HTTP redirect server error: {}", e);
         }
     });
 
@@ -224,7 +253,7 @@ async fn serve_with_tls(state: AppState, tls: TlsOptions) -> Result<()> {
     let https_addr = SocketAddr::from(([0, 0, 0, 0], tls.https_port));
 
     tracing::info!("tenement listening on https://{}:{}", tls.domain, tls.https_port);
-    tracing::info!("HTTP + ACME challenges on port {}", tls.http_port);
+    tracing::info!("HTTP redirect on port {}", tls.http_port);
     if tls.staging {
         tracing::warn!("Using Let's Encrypt STAGING environment (certs not trusted by browsers)");
     }
@@ -239,43 +268,33 @@ async fn serve_with_tls(state: AppState, tls: TlsOptions) -> Result<()> {
     Ok(())
 }
 
-/// HTTP server on port 80 - handles ACME HTTP-01 challenges and redirects other traffic to HTTPS
-async fn serve_http_with_challenges<S>(
-    http_port: u16,
-    https_port: u16,
-    challenge_service: S,
-) -> Result<()>
-where
-    S: tower::Service<Request<Body>, Response = Response> + Clone + Send + 'static,
-    S::Future: Send,
-    S::Error: std::error::Error + Send + Sync + 'static,
-{
-    let redirect_app = Router::new()
-        // ACME HTTP-01 challenge endpoint
-        .route_service("/.well-known/acme-challenge/{token}", challenge_service)
-        // Redirect everything else to HTTPS
-        .fallback(move |Host(host): Host, req: Request<Body>| {
-            async move {
-                // Strip port from host if present
-                let host = host.split(':').next().unwrap_or(&host);
-                let path = req.uri().path_and_query()
-                    .map(|pq| pq.as_str())
-                    .unwrap_or("/");
+/// HTTP server on port 80 - redirects all traffic to HTTPS
+/// (TLS-ALPN-01 handles ACME challenges on port 443, so no challenge handling needed here)
+async fn serve_http_redirect(http_port: u16, https_port: u16) -> Result<()> {
+    let redirect_app = Router::new().fallback(move |Host(host): Host, req: Request<Body>| {
+        async move {
+            // Strip port from host if present
+            let host = host.split(':').next().unwrap_or(&host);
+            let path = req
+                .uri()
+                .path_and_query()
+                .map(|pq| pq.as_str())
+                .unwrap_or("/");
 
-                let redirect_url = if https_port == 443 {
-                    format!("https://{}{}", host, path)
-                } else {
-                    format!("https://{}:{}{}", host, https_port, path)
-                };
+            let redirect_url = if https_port == 443 {
+                format!("https://{}{}", host, path)
+            } else {
+                format!("https://{}:{}{}", host, https_port, path)
+            };
 
-                Redirect::permanent(&redirect_url)
-            }
-        });
+            Redirect::permanent(&redirect_url)
+        }
+    });
 
     let addr = SocketAddr::from(([0, 0, 0, 0], http_port));
     let listener = tokio::net::TcpListener::bind(addr).await?;
 
-    tracing::debug!("HTTP server listening on port {} (ACME challenges + redirect)", http_port);
+    tracing::debug!("HTTP redirect server listening on port {}", http_port);
 
     axum::serve(listener, redirect_app).await?;
     Ok(())

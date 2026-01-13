@@ -195,11 +195,12 @@ impl Hypervisor {
         // Merge extra env vars
         env.extend(extra_env);
 
-        // Add PORT env var for TCP-based runtimes
+        // Always set SOCKET_PATH for backwards compatibility and test scripts
+        env.insert("SOCKET_PATH".to_string(), socket.to_string_lossy().to_string());
+
+        // Also set PORT for TCP-based runtimes (Process/Namespace/Sandbox)
         if let Some(port) = port {
             env.insert("PORT".to_string(), port.to_string());
-        } else {
-            env.insert("SOCKET_PATH".to_string(), socket.to_string_lossy().to_string());
         }
 
         // Build spawn config
