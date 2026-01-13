@@ -20,11 +20,11 @@ The core vision: **one server, one CLI, multiple isolation levels.**
 Optimized for: **overstuff servers with small programs that need isolation**.
 
 ```
-Lightest                                              Heaviest
-   |                                                      |
-process  →  namespace  →  sandbox  →  wasm  →  vm
-   |            |            |          |        |
- none       unshare       gvisor    wasmtime   firecracker
+Lightest                                    Heaviest
+   |                                            |
+process  →  namespace  →  sandbox  →  vm
+   |            |            |          |
+ none       unshare       gvisor    firecracker
 ```
 
 ### Isolation Levels
@@ -34,7 +34,6 @@ process  →  namespace  →  sandbox  →  wasm  →  vm
 | `process` | bare process | ~0 | <10ms | ❌ | ❌ | same trust boundary |
 | `namespace` | unshare (PID+Mount) | ~0 | <10ms | ✅ | ❌ | **default** - trusted code |
 | `sandbox` | gVisor (runsc) | ~20MB | <100ms | ✅ | ✅ | untrusted/multi-tenant |
-| `wasm` | wasmtime | ~5MB | ~1ms | ✅ | N/A (no syscalls) | compiled languages (Rust/Go/C) |
 | `vm` | Firecracker/QEMU | ~128MB | ~125ms | ✅ | ✅ (kernel) | compliance, custom kernel |
 
 ### Why `namespace` as default?
@@ -189,21 +188,6 @@ gVisor integration for syscall-filtered execution.
 - <100ms startup
 - OCI compatible
 - Runs normal Linux binaries (no recompilation)
-
-### Phase 5: WASM Runtime (v0.6)
-
-WebAssembly sandbox for WASI-compiled workloads.
-
-- [ ] `WasmRuntime` using wasmtime
-- [ ] WASI support for filesystem/network (capability-based)
-- [ ] Best for Rust/Go/C compiled to WASM
-
-**WASM details:**
-- ~5MB runtime overhead
-- ~1ms cold start
-- True sandbox: no syscalls unless granted
-- **Limitation:** code must compile to WASM (no Python/Node/Ruby)
-- **Limitation:** limited thread support (WASI threads evolving)
 
 ### Phase 6: Resource Limits (v0.7) - DONE
 
@@ -604,6 +588,36 @@ Export your tenement/slum config to cloud providers.
 
 ---
 
+## Future/Maybe Features
+
+Features that might be added later if there's demand, but are not currently prioritized.
+
+### WASM Runtime (wasmtime)
+
+WebAssembly sandbox for WASI-compiled workloads.
+
+**Why deprioritized:**
+- Limited language support: only Rust/Go/C (no Python/Node/Ruby)
+- Overlaps with existing runtimes: namespace (trusted) + sandbox (untrusted) covers most use cases
+- WASI threads still evolving (limited concurrency support)
+- Real-world tenement users run Python/Node apps that can't compile to WASM
+
+**Would require:**
+- [ ] `WasmRuntime` using wasmtime
+- [ ] WASI support for filesystem/network (capability-based)
+- [ ] Feature flag: `--features wasm`
+
+**Details:**
+- ~5MB runtime overhead (vs ~20MB for gVisor)
+- ~1ms cold start
+- True sandbox: no syscalls unless granted via capabilities
+- **Limitation:** code must compile to WASM (no dynamic languages)
+- **Limitation:** limited thread support (WASI threads evolving)
+
+**If you need this feature, open an issue explaining your use case.**
+
+---
+
 ## Platform Support
 
 **Linux only.** Tenement is a production tool for Linux servers.
@@ -612,7 +626,6 @@ Export your tenement/slum config to cloud providers.
 |-----------|-------|---------------|
 | process | ✅ | ❌ |
 | namespace | ✅ (default) | ❌ |
-| wasm | ✅ | ❌ |
 | sandbox | ✅ | ❌ |
 | vm | ✅ KVM | ❌ |
 
@@ -639,14 +652,12 @@ For local development, test components individually and deploy to Linux (Fly.io,
 | `process` | ❌ None | ❌ | None | ~0 |
 | `namespace` | ✅ Full | ❌ | None | ~0 |
 | `sandbox` | ✅ Full | ✅ | gVisor | ~20MB |
-| `wasm` | ✅ Full | N/A | wasmtime | ~5MB |
 | `vm` | ✅ Full | ✅ (kernel) | KVM | ~128MB |
 
 **When to use what:**
 - `process` - same trust boundary, no isolation needed
 - `namespace` (default) - trusted code, `/proc` isolated, zero overhead
 - `sandbox` - untrusted/multi-tenant code, syscall filtering
-- `wasm` - compiled languages (Rust/Go/C) with minimal overhead
 - `vm` - compliance, custom kernel, maximum paranoia
 
 ### Secrets Management
