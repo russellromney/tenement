@@ -1,6 +1,6 @@
 //! HTTP server with subdomain routing, reverse proxy, and automatic TLS
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use axum::{
     body::Body,
     extract::{Host, Query, State},
@@ -39,6 +39,16 @@ pub struct TlsOptions {
     pub http_port: u16,
 }
 
+/// TLS status information for the status endpoint
+#[derive(Clone, Default)]
+pub struct TlsStatus {
+    pub enabled: bool,
+    pub domain: Option<String>,
+    pub staging: bool,
+    pub https_port: u16,
+    pub http_port: u16,
+}
+
 /// Application state shared across handlers
 #[derive(Clone)]
 pub struct AppState {
@@ -46,6 +56,7 @@ pub struct AppState {
     pub domain: String,
     pub client: Client<hyper_util::client::legacy::connect::HttpConnector, Body>,
     pub config_store: Arc<ConfigStore>,
+    pub tls_status: TlsStatus,
 }
 
 /// Create the router (exposed for testing)
@@ -59,6 +70,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/instances/{id}/storage", get(get_instance_storage))
         .route("/api/logs", get(query_logs))
         .route("/api/logs/stream", get(stream_logs))
+        .route("/api/tls/status", get(tls_status_endpoint))
         // Dashboard static assets
         .route("/assets/*path", get(dashboard_asset))
         // Fallback handles subdomain routing (for non-subdomain 404s)
@@ -175,11 +187,24 @@ pub async fn serve(
 
     let client = Client::builder(TokioExecutor::new()).build_http();
 
+    // Build TLS status from options
+    let tls_status = match &tls_options {
+        Some(tls) if tls.enabled => TlsStatus {
+            enabled: true,
+            domain: Some(tls.domain.clone()),
+            staging: tls.staging,
+            https_port: tls.https_port,
+            http_port: tls.http_port,
+        },
+        _ => TlsStatus::default(),
+    };
+
     let state = AppState {
         hypervisor,
         domain: domain.clone(),
         client,
         config_store,
+        tls_status,
     };
 
     match tls_options {
@@ -208,8 +233,21 @@ async fn serve_http_only(state: AppState, port: u16) -> Result<()> {
 /// HTTPS server with automatic Let's Encrypt certificates
 /// Uses TLS-ALPN-01 challenge (default in rustls-acme) - handles everything on port 443
 async fn serve_with_tls(state: AppState, tls: TlsOptions) -> Result<()> {
-    // Ensure cache directory exists
+    // Ensure cache directory exists with secure permissions
     std::fs::create_dir_all(&tls.cache_dir)?;
+
+    // Set restrictive permissions on cache directory (contains private keys)
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let perms = std::fs::Permissions::from_mode(0o700);
+        std::fs::set_permissions(&tls.cache_dir, perms).with_context(|| {
+            format!(
+                "Failed to set secure permissions on ACME cache directory: {}",
+                tls.cache_dir.display()
+            )
+        })?;
+    }
 
     // Create ACME configuration - uses TLS-ALPN-01 by default
     // TLS-ALPN-01 handles challenges on port 443, no separate port 80 listener needed
@@ -224,14 +262,49 @@ async fn serve_with_tls(state: AppState, tls: TlsOptions) -> Result<()> {
     let acceptor = acme_state.axum_acceptor(acme_state.default_rustls_config());
 
     // Spawn ACME event handler (handles cert acquisition/renewal)
+    // Tracks consecutive errors and provides troubleshooting hints
+    let acme_domain = tls.domain.clone();
     tokio::spawn(async move {
+        let mut consecutive_errors: u32 = 0;
+        let mut cert_acquired = false;
+
         loop {
             match acme_state.next().await {
                 Some(Ok(event)) => {
-                    tracing::info!("ACME event: {:?}", event);
+                    consecutive_errors = 0;
+                    cert_acquired = true;
+                    tracing::info!("ACME: Certificate event for {}: {:?}", acme_domain, event);
                 }
                 Some(Err(err)) => {
-                    tracing::error!("ACME error: {:?}", err);
+                    consecutive_errors += 1;
+                    tracing::error!(
+                        "ACME error (attempt {}) for {}: {:?}",
+                        consecutive_errors,
+                        acme_domain,
+                        err
+                    );
+
+                    // After 3 consecutive errors, provide troubleshooting hints
+                    if consecutive_errors == 3 {
+                        tracing::warn!(
+                            "ACME certificate acquisition failing. Troubleshooting checklist:\n\
+                            - Verify DNS for {} points to this server\n\
+                            - Ensure port 443 is accessible from the internet\n\
+                            - Check firewall allows inbound HTTPS traffic\n\
+                            - Verify domain ownership if using production Let's Encrypt",
+                            acme_domain
+                        );
+                    }
+
+                    // After 10 consecutive errors, warn about rate limits
+                    if consecutive_errors == 10 && !cert_acquired {
+                        tracing::error!(
+                            "ACME has failed {} times without acquiring a certificate.\n\
+                            Consider using --staging flag to avoid hitting Let's Encrypt rate limits.\n\
+                            Rate limit: 5 failed validations per account per hostname per hour.",
+                            consecutive_errors
+                        );
+                    }
                 }
                 None => break,
             }
@@ -318,6 +391,32 @@ async fn health() -> impl IntoResponse {
 #[derive(Serialize)]
 struct HealthResponse {
     status: &'static str,
+}
+
+/// TLS status endpoint - returns current TLS configuration
+async fn tls_status_endpoint(State(state): State<AppState>) -> impl IntoResponse {
+    Json(TlsStatusResponse {
+        enabled: state.tls_status.enabled,
+        domain: state.tls_status.domain.clone(),
+        staging: state.tls_status.staging,
+        https_port: state.tls_status.https_port,
+        http_port: state.tls_status.http_port,
+        recommendation: if state.tls_status.enabled {
+            None
+        } else {
+            Some("Use --caddy flag with `ten install` for production HTTPS".to_string())
+        },
+    })
+}
+
+#[derive(Serialize)]
+struct TlsStatusResponse {
+    enabled: bool,
+    domain: Option<String>,
+    staging: bool,
+    https_port: u16,
+    http_port: u16,
+    recommendation: Option<String>,
 }
 
 /// Prometheus metrics endpoint
@@ -844,6 +943,7 @@ mod tests {
             domain: "example.com".to_string(),
             client,
             config_store,
+            tls_status: TlsStatus::default(),
         };
         (state, token, dir)
     }

@@ -1,0 +1,12 @@
+# Hello World Example
+#
+# The simplest possible tenement setup - a bash script that responds to HTTP.
+#
+# Run:
+#   ten serve --port 8080 --domain localhost
+#   ten spawn hello --id world
+#   curl http://world.hello.localhost:8080/
+
+[service.hello]
+command = "./server.sh"
+health = "/"

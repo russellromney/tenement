@@ -8,7 +8,7 @@ use hyper_util::{client::legacy::Client, rt::TokioExecutor};
 use std::sync::Arc;
 use tempfile::TempDir;
 use tenement::{generate_token, init_db, Config, ConfigStore, Hypervisor, TokenStore};
-use tenement_cli::server::{create_router, AppState};
+use tenement_cli::server::{create_router, AppState, TlsStatus};
 
 /// Create test state with auth token.
 /// Returns (TestServer, token, config_store, temp_dir) - temp_dir must be kept alive during test.
@@ -30,6 +30,7 @@ async fn setup_test_server() -> (TestServer, String, Arc<ConfigStore>, TempDir) 
         domain: "example.com".to_string(),
         client,
         config_store: config_store.clone(),
+        tls_status: TlsStatus::default(),
     };
 
     let app = create_router(state);
@@ -781,6 +782,7 @@ async fn test_no_token_configured() {
         domain: "example.com".to_string(),
         client,
         config_store,
+        tls_status: TlsStatus::default(),
     };
 
     let app = create_router(state);

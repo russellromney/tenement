@@ -67,7 +67,6 @@ Uses Linux namespaces (PID + Mount) to give each process its own `/proc` and iso
 ```toml
 [service.api]
 command = "uv run python app.py"
-socket = "/tmp/api-{id}.sock"
 health = "/health"
 isolation = "namespace"
 
@@ -133,6 +132,45 @@ API runs in namespace isolation (trusted, fast). User plugins run in gVisor sand
 MicroVM isolation with Firecracker. ~128MB overhead, compliance-grade isolation.
 
 Planned for future releases.
+
+## Decision Flowchart
+
+```
+                  Start
+                    │
+                    ▼
+        ┌───────────────────────┐
+        │ Is the code trusted?  │
+        │ (your own code, not   │
+        │  user-uploaded)       │
+        └──────────┬────────────┘
+                   │
+          ┌────────┴────────┐
+          │                 │
+        Yes                 No
+          │                 │
+          ▼                 ▼
+    ┌───────────┐    ┌───────────────┐
+    │ Need /proc│    │ Use SANDBOX   │
+    │ isolation?│    │ (gVisor)      │
+    └─────┬─────┘    └───────────────┘
+          │
+    ┌─────┴─────┐
+    │           │
+   Yes          No
+    │           │
+    ▼           ▼
+┌──────────┐ ┌──────────┐
+│NAMESPACE │ │ PROCESS  │
+│ (default)│ │(no isol.)│
+└──────────┘ └──────────┘
+```
+
+**Quick decision:**
+- **Trusted code + multi-tenant** → `namespace` (default)
+- **Trusted code + debugging** → `process`
+- **Untrusted code** → `sandbox`
+- **Compliance/custom kernel** → `firecracker` or `qemu`
 
 ## Choosing the Right Level
 

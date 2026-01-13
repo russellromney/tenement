@@ -112,6 +112,13 @@ enum Commands {
         /// Print generated files without installing
         #[arg(long)]
         dry_run: bool,
+        /// Also install and configure Caddy as HTTPS reverse proxy (recommended for production)
+        #[arg(long)]
+        caddy: bool,
+        /// DNS provider for wildcard certs (cloudflare, route53, digitalocean, etc.)
+        /// Required for per-process wildcards like *.api.example.com
+        #[arg(long)]
+        dns_provider: Option<String>,
     },
     /// Uninstall tenement systemd service
     Uninstall,
@@ -132,6 +139,10 @@ enum Commands {
         /// Enable Caddy as systemd service
         #[arg(long)]
         systemd: bool,
+        /// DNS provider for wildcard certs (cloudflare, route53, digitalocean, etc.)
+        /// Enables per-process wildcards like *.api.example.com
+        #[arg(long)]
+        dns_provider: Option<String>,
     },
 }
 
@@ -157,6 +168,8 @@ async fn main() -> Result<()> {
                         "TLS enabled but no email provided.\n\
                         Use --email <your@email.com> for Let's Encrypt registration."
                     ))?;
+
+                validate_acme_email(&acme_email)?;
 
                 if domain == "localhost" {
                     anyhow::bail!(
@@ -186,6 +199,8 @@ async fn main() -> Result<()> {
                         Add acme_email to [settings.tls] in tenement.toml"
                     ))?;
 
+                validate_acme_email(&acme_email)?;
+
                 let tls_domain = config.settings.tls.domain.clone()
                     .unwrap_or_else(|| domain.clone());
 
@@ -212,6 +227,18 @@ async fn main() -> Result<()> {
             } else {
                 None
             };
+
+            // Validate TLS configuration
+            if let Some(ref tls_opts) = tls_options {
+                if tls_opts.http_port == tls_opts.https_port {
+                    anyhow::bail!(
+                        "HTTP port ({}) and HTTPS port ({}) cannot be the same.\n\
+                        The HTTP port is used for redirects to HTTPS.",
+                        tls_opts.http_port,
+                        tls_opts.https_port
+                    );
+                }
+            }
 
             let hypervisor = Hypervisor::new(config);
             server::serve(hypervisor, domain, port, config_store, tls_options).await?;
@@ -324,14 +351,14 @@ async fn main() -> Result<()> {
             println!("Store this token securely - it cannot be recovered.");
             println!("Use it in the Authorization header: Bearer {}", token);
         }
-        Commands::Install { domain, port, config, dry_run } => {
-            install::install(domain, port, config, dry_run)?;
+        Commands::Install { domain, port, config, dry_run, caddy: with_caddy, dns_provider } => {
+            install::install(domain, port, config, dry_run, with_caddy, dns_provider)?;
         }
         Commands::Uninstall => {
             install::uninstall()?;
         }
-        Commands::Caddy { domain, port, output, install: do_install, systemd } => {
-            caddy::run(domain, port, output, do_install, systemd)?;
+        Commands::Caddy { domain, port, output, install: do_install, systemd, dns_provider } => {
+            caddy::run(domain, port, output, do_install, systemd, dns_provider)?;
         }
     }
 
@@ -344,6 +371,33 @@ fn parse_instance(s: &str) -> Result<(String, String)> {
         anyhow::bail!("Invalid instance format. Use 'process:id'");
     }
     Ok((parts[0].to_string(), parts[1].to_string()))
+}
+
+/// Validate ACME email format for Let's Encrypt registration
+fn validate_acme_email(email: &str) -> Result<()> {
+    if email.is_empty() {
+        anyhow::bail!(
+            "ACME email cannot be empty.\n\
+            Provide a valid email for Let's Encrypt registration."
+        );
+    }
+    if !email.contains('@') {
+        anyhow::bail!(
+            "Invalid email format: '{}'\n\
+            Email must contain '@' for Let's Encrypt registration.",
+            email
+        );
+    }
+    // Basic check for domain part
+    let parts: Vec<&str> = email.split('@').collect();
+    if parts.len() != 2 || parts[1].is_empty() || !parts[1].contains('.') {
+        anyhow::bail!(
+            "Invalid email format: '{}'\n\
+            Email must have a valid domain (e.g., user@example.com).",
+            email
+        );
+    }
+    Ok(())
 }
 
 fn format_uptime(secs: u64) -> String {

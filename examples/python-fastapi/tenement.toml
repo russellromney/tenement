@@ -1,0 +1,23 @@
+# Python FastAPI Example
+#
+# FastAPI app running with uvicorn, demonstrating:
+# - Per-instance database paths
+# - Health checks
+# - Idle timeout (scale-to-zero)
+#
+# Run:
+#   uv sync  # or: pip install -r requirements.txt
+#   ten serve --port 8080 --domain localhost
+#   ten spawn api --id prod
+#   curl http://prod.api.localhost:8080/
+
+[settings]
+data_dir = "./data"
+
+[service.api]
+command = "uv run python app.py"
+health = "/health"
+idle_timeout = 300  # Stop after 5 mins idle
+
+[service.api.env]
+DATABASE_PATH = "{data_dir}/{id}/app.db"

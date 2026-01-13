@@ -1,10 +1,13 @@
 //! systemd installation for tenement
 //!
 //! Generates and installs a systemd unit file to run tenement as a service.
+//! Optionally installs and configures Caddy as a reverse proxy with TLS.
 
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+
+use crate::caddy;
 
 /// Paths for systemd installation
 const SYSTEMD_UNIT_PATH: &str = "/etc/systemd/system/tenement.service";
@@ -52,7 +55,15 @@ WantedBy=multi-user.target
 }
 
 /// Install tenement as a systemd service
-pub fn install(domain: String, port: u16, config: Option<PathBuf>, dry_run: bool) -> Result<()> {
+/// Optionally installs Caddy as a reverse proxy with automatic TLS
+pub fn install(
+    domain: String,
+    port: u16,
+    config: Option<PathBuf>,
+    dry_run: bool,
+    with_caddy: bool,
+    dns_provider: Option<String>,
+) -> Result<()> {
     // Find or use specified config file
     let config_path = match config {
         Some(p) => {
@@ -89,8 +100,19 @@ pub fn install(domain: String, port: u16, config: Option<PathBuf>, dry_run: bool
         println!("3. Copy config to {}", dest_config.display());
         println!("4. Create directory {}", DATA_DIR);
         println!("5. Create systemd unit at {}", SYSTEMD_UNIT_PATH);
+        if with_caddy {
+            println!("6. Install Caddy (if not present)");
+            println!("7. Generate Caddyfile at /etc/caddy/Caddyfile");
+            println!("8. Enable Caddy systemd service");
+            if let Some(ref provider) = dns_provider {
+                println!("   - Using DNS provider '{}' for per-process wildcards", provider);
+            }
+        }
         println!("\n=== Generated systemd unit ===\n");
         println!("{}", unit_content);
+        if with_caddy {
+            println!("\n=== Would generate Caddyfile (see `ten caddy` for preview) ===\n");
+        }
         return Ok(());
     }
 
@@ -167,6 +189,35 @@ pub fn install(domain: String, port: u16, config: Option<PathBuf>, dry_run: bool
         println!("\n[WARN] Service may not be running. Check with:");
         println!("       systemctl status tenement");
         println!("       journalctl -u tenement");
+    }
+
+    // Install and configure Caddy if requested
+    if with_caddy {
+        println!("\n=== Setting up Caddy HTTPS reverse proxy ===\n");
+
+        // Use the caddy module's run function with systemd enabled
+        caddy::run(
+            domain.clone(),
+            port,
+            Some(PathBuf::from("/etc/caddy/Caddyfile")),
+            true,   // install caddy
+            true,   // enable systemd
+            dns_provider.clone(),
+        )?;
+
+        println!("\n=== Installation Complete ===");
+        println!("\nYour setup:");
+        println!("  - Tenement: Running on localhost:{}", port);
+        println!("  - Caddy:    Reverse proxy with automatic HTTPS");
+        println!("  - Access:   https://{}", domain);
+
+        if let Some(ref provider) = dns_provider {
+            println!("\n  DNS-01 Setup Required:");
+            println!("  Set the DNS API token environment variable for Caddy:");
+            println!("  Edit /etc/systemd/system/caddy.service to add:");
+            println!("    Environment={}=your-api-token", caddy::dns_token_env_var(provider));
+            println!("  Then: sudo systemctl daemon-reload && sudo systemctl restart caddy");
+        }
     }
 
     Ok(())
@@ -308,7 +359,9 @@ mod tests {
             "example.com".to_string(),
             8080,
             Some(PathBuf::from("/nonexistent/config.toml")),
-            true,
+            true,   // dry_run
+            false,  // with_caddy
+            None,   // dns_provider
         );
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("not found"));

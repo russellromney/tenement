@@ -63,21 +63,27 @@ curl https://example.com/api/tls/status
 {
   "enabled": true,
   "domain": "example.com",
-  "valid_until": "2024-04-15T00:00:00Z",
-  "issuer": "Let's Encrypt"
+  "staging": false,
+  "https_port": 443,
+  "http_port": 80,
+  "status": "running"
 }
 ```
 
 ### Wildcard Certificates (DNS-01)
 
-For wildcard subdomain routing (`*.example.com`), use DNS-01 challenge:
+For wildcard subdomain routing (`*.example.com`), use Caddy with DNS challenge:
 
 ```bash
-ten serve --tls --domain example.com --email admin@example.com \
-  --dns-provider cloudflare --dns-token $CF_API_TOKEN
+# Generate Caddyfile with DNS provider support
+ten caddy --domain example.com --dns-provider cloudflare
+
+# Set DNS token via environment for Caddy
+export CF_API_TOKEN=$CF_API_TOKEN
+caddy run --config /etc/caddy/Caddyfile
 ```
 
-**Supported DNS providers:**
+**Supported DNS providers (via Caddy):**
 - `cloudflare` - Cloudflare API token
 - `route53` - AWS Route53 (uses AWS credentials)
 - `digitalocean` - DigitalOcean API token
@@ -123,10 +129,10 @@ ten caddy --domain example.com --install
 ### Start Services
 
 ```bash
-# tenement listens on Unix socket
-ten serve --socket /tmp/tenement/tenement.sock
+# tenement listens on a port (Caddy will proxy to it)
+ten serve --port 8080
 
-# Caddy handles TLS and proxies to socket
+# Caddy handles TLS and proxies to tenement
 systemctl start caddy
 ```
 
@@ -213,8 +219,7 @@ ten install --caddy --domain example.com --dns-provider cloudflare
 | `--caddy` | Generate Caddyfile |
 | `--domain <domain>` | Domain for routing |
 | `--email <email>` | Email for Let's Encrypt |
-| `--dns-provider <provider>` | DNS provider for wildcard certs |
-| `--dns-token <token>` | API token for DNS provider |
+| `--dns-provider <provider>` | DNS provider for Caddy wildcard certs |
 | `--install` | Also install Caddy (apt) |
 | `--systemd` | Enable systemd services on boot |
 | `--dry-run` | Show what would be done |

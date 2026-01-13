@@ -1,0 +1,18 @@
+# Go net/http Example
+#
+# Go HTTP server demonstrating tenement integration.
+#
+# Run:
+#   go build -o server
+#   ten serve --port 8080 --domain localhost
+#   ten spawn api --id prod
+#   curl http://prod.api.localhost:8080/
+
+[settings]
+data_dir = "./data"
+
+[service.api]
+command = "./server"
+health = "/health"
+memory_limit_mb = 64
+cpu_shares = 50

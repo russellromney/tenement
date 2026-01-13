@@ -35,11 +35,15 @@ ufw allow 443/tcp
 
 **Cause:** Wildcard certs require DNS-01 challenge, not HTTP-01.
 
-**Solution:** Use `--dns-provider` flag:
+**Solution:** Use Caddy with DNS challenge for wildcard certificates:
 
 ```bash
-ten serve --tls --domain example.com \
-  --dns-provider cloudflare --dns-token $CF_TOKEN
+# Generate Caddyfile with DNS provider
+ten caddy --domain example.com --dns-provider cloudflare
+
+# Set DNS token via environment for Caddy
+export CF_API_TOKEN=$CF_TOKEN
+caddy run --config /etc/caddy/Caddyfile
 ```
 
 ### "Certificate expired"
@@ -154,8 +158,9 @@ echo "+memory" | sudo tee /sys/fs/cgroup/cgroup.subtree_control
 **Diagnosis:**
 
 ```bash
-# Check logs
-ten logs api:myid
+# Check logs via API
+curl -H "Authorization: Bearer $TOKEN" \
+  "http://localhost:8080/api/logs?process=api&instance=myid"
 
 # Check if command exists
 which my-command
@@ -180,8 +185,9 @@ cd /var/lib/tenement/api/myid && ./my-command
 # Check health endpoint directly
 curl --unix-socket /tmp/tenement/api-myid.sock http://localhost/health
 
-# Check instance logs
-ten logs api:myid
+# Check instance logs via API
+curl -H "Authorization: Bearer $TOKEN" \
+  "http://localhost:8080/api/logs?process=api&instance=myid"
 ```
 
 **Common causes:**
@@ -304,8 +310,8 @@ systemctl status tenement
 # Check logs
 journalctl -u tenement -n 50
 
-# Verify config
-ten serve --config /etc/tenement/tenement.toml --dry-run
+# Verify config by showing it
+TENEMENT_CONFIG=/etc/tenement/tenement.toml ten config
 ```
 
 ### "Service keeps restarting"
@@ -321,18 +327,139 @@ ten serve --config /etc/tenement/tenement.toml --dry-run
 journalctl -u tenement -n 100
 
 # Test config manually
-ten serve --config /etc/tenement/tenement.toml
+TENEMENT_CONFIG=/etc/tenement/tenement.toml ten serve
 
 # Increase restart delay
 sudo systemctl edit tenement
 # Add: RestartSec=30
 ```
 
+## Debugging Deep Dive
+
+For complex issues, use these advanced techniques.
+
+### Trace Process Startup
+
+```bash
+# Watch what tenement spawns
+strace -f -e trace=execve,clone ten spawn api --id test
+
+# Check environment passed to process
+strace -f -e trace=execve ten spawn api --id test 2>&1 | grep -A1 execve
+```
+
+### Inspect Running Instance
+
+```bash
+# Find the process
+ps aux | grep api
+
+# Check open files and sockets
+lsof -p <PID>
+
+# Check network connections
+ss -tlnp | grep <PID>
+
+# Check cgroup membership
+cat /proc/<PID>/cgroup
+```
+
+### Debug Health Checks
+
+```bash
+# Manually test health endpoint
+curl -v http://127.0.0.1:<PORT>/health
+
+# Check if port is listening
+ss -tlnp | grep <PORT>
+
+# Watch health check requests (if your app logs them)
+tail -f /var/log/myapp.log | grep health
+```
+
+### Inspect Memory/CPU Limits
+
+```bash
+# Find cgroup path
+INSTANCE_ID="api:prod"
+CGROUP="/sys/fs/cgroup/tenement/${INSTANCE_ID}"
+
+# Check memory limit
+cat $CGROUP/memory.max
+
+# Check current memory usage
+cat $CGROUP/memory.current
+
+# Check CPU weight
+cat $CGROUP/cpu.weight
+
+# Watch resource usage
+watch -n 1 "cat $CGROUP/memory.current && cat $CGROUP/cpu.stat"
+```
+
+### Debug Namespace Isolation
+
+```bash
+# Enter a namespace-isolated process's view
+nsenter -t <PID> -p -m ps aux
+
+# Check if /proc is isolated
+nsenter -t <PID> -p -m cat /proc/1/environ
+```
+
+### Monitor tenement Server
+
+```bash
+# Watch tenement logs
+RUST_LOG=debug ten serve 2>&1 | tee tenement.log
+
+# Monitor metrics
+watch -n 1 "curl -s http://localhost:8080/metrics | grep instance"
+
+# Check API response times
+curl -w "@-" -o /dev/null -s http://localhost:8080/api/instances << 'EOF'
+     time_namelookup:  %{time_namelookup}s\n
+        time_connect:  %{time_connect}s\n
+     time_appconnect:  %{time_appconnect}s\n
+    time_pretransfer:  %{time_pretransfer}s\n
+       time_redirect:  %{time_redirect}s\n
+  time_starttransfer:  %{time_starttransfer}s\n
+                     ----------\n
+          time_total:  %{time_total}s\n
+EOF
+```
+
+### Check Configuration Loading
+
+```bash
+# Show parsed config
+ten config
+
+# Validate config syntax
+cat tenement.toml | toml-json  # if you have toml-json
+
+# Check for duplicate service names
+grep '^\[service\.' tenement.toml | sort | uniq -d
+```
+
+### Network Debugging
+
+```bash
+# Test subdomain routing locally
+curl -H "Host: prod.api.localhost" http://localhost:8080/
+
+# Check DNS resolution
+dig +short prod.api.example.com
+
+# Test with explicit IP
+curl -H "Host: prod.api.example.com" http://<SERVER_IP>:8080/
+```
+
 ## Getting Help
 
 If these solutions don't help:
 
-1. Check logs: `ten logs` and `journalctl -u tenement`
+1. Check logs: API logs endpoint and `journalctl -u tenement`
 2. Search [GitHub Issues](https://github.com/russellromney/tenement/issues)
 3. Open a new issue with:
    - tenement version (`ten --version`)

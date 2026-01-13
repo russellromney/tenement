@@ -28,7 +28,7 @@ fn unique_id(prefix: &str) -> String {
 use tenement::runtime::RuntimeType;
 use tenement::config::ProcessConfig;
 use tenement::{init_db, Config, ConfigStore, Hypervisor, TokenStore};
-use tenement_cli::server::{create_router, AppState};
+use tenement_cli::server::{create_router, AppState, TlsStatus};
 
 /// Create a simple script that touches the socket file and sleeps
 fn create_touch_socket_script(dir: &TempDir) -> std::path::PathBuf {
@@ -135,6 +135,7 @@ async fn setup_with_process(
         domain: "example.com".to_string(),
         client,
         config_store,
+        tls_status: TlsStatus::default(),
     };
 
     let app = create_router(state);

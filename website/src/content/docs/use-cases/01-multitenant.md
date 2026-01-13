@@ -6,9 +6,11 @@ description: Give each customer their own isolated process
 **The primary use case: one app, multiple customers, each with their own process.**
 
 ```
-customer1.myapp.com → api:customer1 → /tmp/api-customer1.sock
-customer2.myapp.com → api:customer2 → /tmp/api-customer2.sock
+customer1.myapp.com → api:customer1
+customer2.myapp.com → api:customer2
 ```
+
+tenement handles subdomain routing automatically.
 
 ## Setup
 
@@ -42,7 +44,6 @@ data_dir = "/var/lib/myapp"
 
 [service.api]
 command = "python app.py"
-socket = "/tmp/api-{id}.sock"
 health = "/health"
 isolation = "namespace"
 idle_timeout = 300
@@ -54,19 +55,12 @@ DATABASE_PATH = "{data_dir}/{id}/app.db"
 **3. Spawn per customer**
 ```bash
 ten spawn api --id customer123
-# customer123.myapp.com now routes to their isolated instance
+# customer123.api.myapp.com now routes to their isolated instance
 ```
 
-**4. Route with nginx/Caddy**
-```nginx
-server {
-  listen 80;
-  server_name ~^(?<id>.+)\.myapp\.com$;
-  location / {
-    proxy_pass http://unix:/tmp/api-$id.sock;
-  }
-}
-```
+**4. Add HTTPS (production)**
+
+See [Production Deployment](/guides/04-production) for TLS setup with Caddy.
 
 ## Why This Works
 

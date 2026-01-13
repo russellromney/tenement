@@ -1,84 +1,79 @@
 ---
-title: The Economics
-description: Why tenement works financially
+title: Why tenement?
+description: The problem tenement solves
 ---
+
+## The Gap
+
+I built tenement because I wanted Fly Machines capabilities on my own server. Spawn processes on demand, stop them when idle, route by subdomain. Without Kubernetes.
+
+Existing options:
+- **systemd** - No routing, no idle timeout, managing 100+ unit files is painful
+- **Docker** - Heavy (~100MB per container), slow startup, overkill for trusted code
+- **Kubernetes** - Control plane overhead exceeds the workloads on a small server
+- **Fly Machines** - Great product, but you pay per machine. Can't overstuff.
+
+tenement fills the gap: lightweight process management with routing, for a single server.
 
 ## The Use Case
 
-Run **1000 isolated services on a $5/month server**.
-
-Each customer gets their own process (no multi-tenant data isolation complexity). You pay for only the 20 that are active at any moment.
-
-## The Math
+**Run many isolated services, mostly idle, on one machine.**
 
 ```
 1000 services configured
-├── 5-20 actually running (rarely active)
-├── 980+ sleeping (zero cost)
-├── Wake on request: user.service.example.com → spawn → proxy
-└── Reap after idle: 5min no requests → kill → free resources
+├── 20 actually running (active users)
+├── 980 sleeping (zero resources)
+├── Wake on request: user.api.example.com → spawn → proxy
+└── Stop after idle: 5 min no requests → kill
 ```
 
-**On a $5/month machine (1 vCPU, 256MB RAM):**
+This works because most SaaS customers aren't active simultaneously. You configure all of them, but only pay for what's running.
 
-- 1000 tenants
-- ~2% active at any time = 20 running instances
-- 20 × 20MB per instance = 400MB RAM
-- Tenement overhead: ~10MB
-- Fits with room to spare
+## Who This Is For
 
-**Economics:**
+You're building multi-tenant software. You want:
 
-| Metric | Value |
-|--------|-------|
-| Cost per tenant | <$0.01/month |
-| Charge per tenant | $5-10/month |
-| Profit per tenant | $4.99-9.99/month |
-| Margin | **500-1000x** |
+- **Process isolation** without container overhead
+- **Subdomain routing** without nginx config sprawl
+- **Scale-to-zero** without paying per-machine
+- **Simple deployment** - one server, one config file
 
-## Three Deployment Models, One Codebase
+You're running **trusted code** - your own apps, not arbitrary user code. (For untrusted code, use `isolation = "sandbox"`.)
 
-Build your app as **single-tenant code** (simpler, fewer bugs). Deploy it three ways:
+## Single-Tenant Code, Multi-Tenant Deployment
 
-### SaaS (Multi-tenant Overstuffed)
-- Infrastructure: Single $5 Fly.io machine
-- Cost per customer: <$0.01/month
-- Charge per customer: $5-10/month
-- Margin: 500-1000x
-- How: tenement spawns isolated process per user
+Write your app as if it serves one customer. No tenant ID checks, no row-level security, no shared database complexity.
 
-### Enterprise (Dedicated)
-- Infrastructure: Dedicated VM (customer's choice or yours)
-- Cost per customer: ~$100/month
-- Charge per customer: $500+/month
-- Margin: 5x
-- How: Same binary, different deployment
+```python
+# app.py - single-tenant code
+db_path = os.getenv("DATABASE_PATH")  # /data/customer123/app.db
+```
 
-### Open Source (Self-hosted)
-- Infrastructure: User's servers
-- Cost per customer: $0 (theirs to maintain)
-- Charge per customer: Free (or support/addons)
-- Margin: Trust + adoption
-- How: Same binary, no tenement layer
+```toml
+# tenement.toml
+[service.api]
+command = "python app.py"
 
-**Your code doesn't change.** Tenement handles the "make it multi-tenant" part at the infrastructure layer.
+[service.api.env]
+DATABASE_PATH = "{data_dir}/{id}/app.db"
+```
 
-## Why This Works
+Each customer gets their own process, their own database file, their own environment. tenement handles the multiplexing.
 
-| Alternative | Why it doesn't fit |
-|---|---|
-| **systemd units** | 1000 unit files, custom routing layer anyway, no built-in idle reap |
-| **Docker** | ~100MB per container × 20 = 2GB for 20 instances. Overkill + slow startup |
-| **Fly Machines** | $5/machine × 1000 services = $5000/month to have all instances running. Not viable |
-| **k8s/Nomad** | Control plane overhead > your actual workloads on a small server |
-| **Cloudflare Workers** | Can't run arbitrary processes, limited to their runtime environment |
+## Pairs Well With
 
-## The Key Insight
+**SQLite + WAL replication** (Litestream, LiteFS, etc.)
 
-At 1000 services that are rarely active, your marginal cost per additional tenant is essentially **zero** once you hit the machine's resource ceiling.
+Each customer gets their own SQLite database. Replicate to S3 for durability. No shared PostgreSQL, no connection pooling complexity. Your app stays simple.
 
-Traditional SaaS pays per instance. tenement pays once and serves 1000.
+```
+customer1.api.example.com → api:customer1 → /data/customer1/app.db
+customer2.api.example.com → api:customer2 → /data/customer2/app.db
+```
 
----
+## What tenement Is Not
 
-**Build single-tenant. Deploy multi-tenant. Profit.**
+- **Not a container runtime** - No images, no registries. Pre-install dependencies on the host.
+- **Not multi-server** - Use [slum](https://github.com/russellromney/tenement) for fleet orchestration.
+- **Not for untrusted code** - Use `sandbox` isolation if you need syscall filtering.
+- **Not Kubernetes** - Single server, single config file, that's it.

@@ -1,43 +1,41 @@
 ---
 title: tenement
-description: Hyperlightweight process hypervisor for single-server deployments
+description: Lightweight process hypervisor for single-server deployments
 ---
 
 **Lightweight process hypervisor in Rust.**
 
-Pack **100 services on a single $5 server**, with 20% typically active.
+Run 100+ isolated services on a single server, with most idle at any time.
 
-## What You Get
+## Features
 
-- **Single binary** (~10MB Rust)
-- **Built-in routing** - `user.api.example.com` → `api:user` automatically
-- **Integrated TLS** - Automatic HTTPS with Let's Encrypt
-- **Process isolation** - Namespace separation (zero overhead) or gVisor sandbox (untrusted code)
-- **Auto-restart** - Health checks with exponential backoff
-- **Scale-to-zero** - Stop idle instances, auto-start on request
+- **Subdomain routing** - `user.api.example.com` → `api:user`
+- **Scale-to-zero** - Stop idle instances, wake on request
+- **Process isolation** - Namespace separation (zero overhead) or gVisor sandbox
 - **Weighted routing** - Blue-green and canary deployments
-- **One TOML config** - All services defined in one file
+- **Auto-restart** - Health checks with exponential backoff
+- **Built-in TLS** - Let's Encrypt certificates
+- **Single binary** - ~10MB, one TOML config file
 
-## Perfect For
+## Use Cases
 
-- 10-1000 customer instances on one $5 server
 - Multi-tenant SaaS (each tenant = isolated process)
-- Microservices without Kubernetes overhead
-- Avoiding Docker complexity for small deployments
+- Microservices on a single server
+- Scale-to-zero services without per-machine pricing
 
-## vs Alternatives
+## Comparison
 
-| Tool | Why not |
-|------|---------|
-| Docker | Heavy, slow startup, network overhead |
+| Tool | Trade-off |
+|------|-----------|
+| Docker | Container overhead, slower startup |
 | systemd | No routing, no idle timeout |
-| K8s | Massive overhead for single server |
-| Fly Machines | Per-machine pricing kills margin at scale |
+| Kubernetes | Complex for single-server deployments |
+| Fly Machines | Pay per machine, can't overstuff |
 
 ## Get Started
 
 - [Quick Start](/intro/01-quick-start) - Installation & first spawn
-- [The Economics](/intro/02-economics) - Detailed cost breakdown
+- [Why tenement?](/intro/02-economics) - The problem it solves
 
 ## Guides
 

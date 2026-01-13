@@ -13,6 +13,9 @@ export default defineConfig({
         alt: 'tenement',
       },
       favicon: '/favicon.svg',
+      components: {
+        ThemeSelect: './src/components/ThemeSelect.astro',
+      },
       social: {
         github: 'https://github.com/russellromney/tenement',
       },

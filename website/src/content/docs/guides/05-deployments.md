@@ -19,9 +19,9 @@ ten ps
 ```
 
 ```
-INSTANCE     SOCKET                    UPTIME    HEALTH    WEIGHT
-api:v1       /tmp/api-v1.sock          2d        healthy   80
-api:v2       /tmp/api-v2.sock          5m        healthy   20
+INSTANCE     SOCKET                           UPTIME    HEALTH    WEIGHT
+api:v1       /tmp/tenement/api-v1.sock        2d        healthy   80
+api:v2       /tmp/tenement/api-v2.sock        5m        healthy   20
 ```
 
 **How it works:**
@@ -164,20 +164,40 @@ ten weight api:prod-3 34
 
 Traffic is distributed randomly based on weights.
 
-## Deployment Commands (Coming Soon)
+## Deployment Commands
 
-The `ten deploy` and `ten route` commands will automate common patterns:
+The `ten deploy` and `ten route` commands automate common deployment patterns:
+
+### ten deploy
+
+Spawn a new version and wait for it to become healthy:
 
 ```bash
-# Future: automated blue-green
+# Deploy v2 with full traffic
 ten deploy api --version v2
 
-# Future: automated canary
-ten deploy api --version v2 --canary 10
+# Deploy v2 with initial weight (for canary)
+ten deploy api --version v2 --weight 10
 
-# Future: route management
-ten route api --strategy canary --target v2
+# Deploy with custom health timeout
+ten deploy api --version v2 --timeout 60
 ```
+
+The deploy command:
+1. Spawns a new instance with the version as instance ID
+2. Waits for health checks to pass (default 30s timeout)
+3. Sets the initial traffic weight
+
+### ten route
+
+Atomically swap traffic between versions (blue-green):
+
+```bash
+# Route all traffic from v1 to v2
+ten route api --from v1 --to v2
+```
+
+This sets `v1` weight to 0 and `v2` weight to 100 in a single operation.
 
 ## Best Practices
 

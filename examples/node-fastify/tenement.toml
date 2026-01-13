@@ -1,0 +1,20 @@
+# Node.js Fastify Example
+#
+# Fastify app demonstrating tenement integration.
+#
+# Run:
+#   npm install  # or: bun install
+#   ten serve --port 8080 --domain localhost
+#   ten spawn web --id prod
+#   curl http://prod.web.localhost:8080/
+
+[settings]
+data_dir = "./data"
+
+[service.web]
+command = "node server.js"
+health = "/health"
+memory_limit_mb = 128
+
+[service.web.env]
+NODE_ENV = "production"

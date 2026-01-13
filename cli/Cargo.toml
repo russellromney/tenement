@@ -54,3 +54,4 @@ libc = "0.2"
 [dev-dependencies]
 axum-test = "16"
 tempfile = "3"
+toml.workspace = true

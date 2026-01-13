@@ -35,12 +35,14 @@ Define services that tenement can spawn. Each service is a template for instance
 ```toml
 [service.api]
 command = "uv run python app.py"    # Command to run
-socket = "/tmp/tenement/api-{id}.sock"  # Socket path template
+args = ["--port", "8000"]           # Optional command arguments
+workdir = "/app"                    # Optional working directory
+socket = "/tmp/tenement/{name}-{id}.sock"  # Socket path template (default)
 health = "/health"                  # Health check endpoint
 startup_timeout = 10                # Max seconds to create socket
 idle_timeout = 300                  # Auto-stop after N seconds idle
 restart = "on-failure"              # Restart policy
-isolation = "namespace"             # Isolation level
+isolation = "namespace"             # Isolation level (alias: runtime)
 
 # Resource limits (cgroups v2, Linux only)
 memory_limit_mb = 256               # Memory limit in MB
@@ -48,7 +50,7 @@ cpu_shares = 100                    # CPU weight (1-10000)
 
 # Storage quotas
 storage_quota_mb = 100              # Max storage per instance (MB)
-storage_persist = true              # Persist data on stop
+storage_persist = false             # Persist data on stop (default: false)
 ```
 
 ### Service Fields
@@ -56,16 +58,18 @@ storage_persist = true              # Persist data on stop
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `command` | string | required | Shell command to start the service |
-| `socket` | string | required | Unix socket path template (`{id}` is replaced) |
-| `health` | string | `/` | HTTP path for health checks |
-| `startup_timeout` | int | `30` | Max seconds to wait for socket |
+| `args` | array | `[]` | Optional command arguments |
+| `workdir` | string | none | Working directory for the process |
+| `socket` | string | `/tmp/tenement/{name}-{id}.sock` | Unix socket path template |
+| `health` | string | none | HTTP path for health checks |
+| `startup_timeout` | int | `10` | Max seconds to wait for socket |
 | `idle_timeout` | int | `0` | Stop after N seconds idle (0 = never) |
 | `restart` | string | `on-failure` | Restart policy: `always`, `on-failure`, `never` |
-| `isolation` | string | `namespace` | Isolation level (see below) |
+| `isolation` | string | `namespace` | Isolation level (alias: `runtime`) |
 | `memory_limit_mb` | int | none | Memory limit in MB (Linux cgroups v2) |
-| `cpu_shares` | int | `100` | CPU weight 1-10000 (Linux cgroups v2) |
+| `cpu_shares` | int | none | CPU weight 1-10000 (Linux cgroups v2) |
 | `storage_quota_mb` | int | none | Max disk usage per instance (MB) |
-| `storage_persist` | bool | `true` | Keep data directory on instance stop |
+| `storage_persist` | bool | `false` | Keep data directory on instance stop |
 
 ### Isolation Levels
 
@@ -74,6 +78,10 @@ storage_persist = true              # Persist data on stop
 | `process` | No isolation | ~0 | Debugging, trusted code |
 | `namespace` | PID + Mount namespace | ~0 | **Default** - multi-tenant trusted code |
 | `sandbox` | gVisor syscall filtering | ~20MB | Untrusted/third-party code |
+| `firecracker` | Firecracker microVM | ~128MB | Full VM isolation (requires KVM) |
+| `qemu` | QEMU VM | ~128MB | Cross-platform VM (requires KVM/HVF) |
+
+**Note:** The `runtime` field is accepted as an alias for `isolation` for backwards compatibility.
 
 ### Restart Policies
 
@@ -95,9 +103,16 @@ SECRET_KEY = "${SECRET_KEY}"        # From environment
 ```
 
 **Template variables:**
-- `{id}` - Instance ID
+- `{name}` - Service name (e.g., "api")
+- `{id}` - Instance ID (e.g., "prod")
 - `{data_dir}` - The `data_dir` from settings
+- `{socket}` - The resolved socket path
+- `{port}` - Auto-allocated TCP port (30000-40000 range)
 - `${VAR}` - Value from host environment
+
+**Auto-set environment variables:**
+- `PORT` - TCP port allocated for the instance
+- `SOCKET_PATH` - Unix socket path for the instance
 
 ## Instances Section
 
@@ -116,6 +131,65 @@ Each key is a service name, value is an array of instance IDs to spawn.
 - Individual spawn failures are logged but don't block others
 - Instances spawn after the server starts listening
 
+## Routing Section
+
+Configure custom routing rules beyond the default subdomain-based routing.
+
+```toml
+[routing]
+default = "api"                     # Default service for root domain
+
+[routing.subdomain]
+"admin" = "admin-service"           # admin.example.com → admin-service
+
+[routing.path]
+"/api" = "api-service"              # example.com/api/* → api-service
+"/docs" = "docs-service"            # example.com/docs/* → docs-service
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `default` | string | Service to route root domain requests to |
+| `subdomain` | map | Subdomain → service name mappings |
+| `path` | map | Path prefix → service name mappings |
+
+**Default routing (without config):**
+- `{id}.{service}.{domain}` → routes to specific instance
+- `{service}.{domain}` → weighted routing across all instances of service
+- `{domain}` → dashboard
+
+## TLS Section
+
+Configure automatic HTTPS with Let's Encrypt certificates.
+
+```toml
+[settings.tls]
+enabled = true
+acme_email = "admin@example.com"    # Required for Let's Encrypt
+domain = "example.com"
+cache_dir = "/var/lib/tenement/acme"  # Certificate cache (default: {data_dir}/acme)
+staging = false                     # Use staging for testing (avoids rate limits)
+https_port = 443
+http_port = 80
+dns_provider = "cloudflare"         # For wildcard certs via Caddy
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | bool | `false` | Enable TLS |
+| `acme_email` | string | none | Email for Let's Encrypt registration |
+| `domain` | string | none | Domain for TLS certificate |
+| `cache_dir` | string | `{data_dir}/acme` | Directory for certificate cache |
+| `staging` | bool | `false` | Use Let's Encrypt staging environment |
+| `https_port` | int | `443` | HTTPS listening port |
+| `http_port` | int | `80` | HTTP port (redirects + ACME challenges) |
+| `dns_provider` | string | none | DNS provider for Caddy wildcard certs |
+
+**CLI flags take precedence:**
+```bash
+ten serve --tls --domain example.com --email admin@example.com --staging
+```
+
 ## Complete Example
 
 ```toml
@@ -125,9 +199,13 @@ health_check_interval = 10
 max_restarts = 3
 restart_window = 300
 
+[settings.tls]
+enabled = true
+acme_email = "admin@example.com"
+domain = "example.com"
+
 [service.api]
 command = "uv run python app.py"
-socket = "/tmp/tenement/api-{id}.sock"
 health = "/health"
 idle_timeout = 300
 restart = "on-failure"
@@ -142,7 +220,6 @@ LOG_LEVEL = "info"
 
 [service.worker]
 command = "./worker"
-socket = "/tmp/tenement/worker-{id}.sock"
 health = "/health"
 isolation = "namespace"
 memory_limit_mb = 512
@@ -161,7 +238,9 @@ Some config values can be overridden via CLI flags:
 ten serve --port 8080               # Override listen port
 ten serve --domain example.com      # Set domain for routing
 ten serve --tls --email you@x.com   # Enable TLS with ACME
-ten serve --config custom.toml      # Use different config file
+
+# Use different config file via environment variable
+TENEMENT_CONFIG=custom.toml ten serve
 ```
 
 ## Next Steps

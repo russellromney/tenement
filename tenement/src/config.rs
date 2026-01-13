@@ -109,6 +109,10 @@ pub struct TlsConfig {
     /// HTTP port for redirects and ACME challenges (default: 80)
     #[serde(default = "default_http_port")]
     pub http_port: u16,
+
+    /// DNS provider for Caddy wildcard certificates (cloudflare, route53, etc.)
+    /// Used when generating Caddyfile with per-process wildcards
+    pub dns_provider: Option<String>,
 }
 
 fn default_https_port() -> u16 {
@@ -129,6 +133,7 @@ impl Default for TlsConfig {
             staging: false,
             https_port: default_https_port(),
             http_port: default_http_port(),
+            dns_provider: None,
         }
     }
 }
@@ -284,7 +289,7 @@ fn default_vsock_port() -> u32 {
 }
 
 fn default_socket() -> String {
-    "/tmp/{name}-{id}.sock".to_string()
+    "/tmp/tenement/{name}-{id}.sock".to_string()
 }
 
 fn default_restart_policy() -> String {
@@ -556,7 +561,7 @@ command = "./api-server"
         assert!(config.service.contains_key("api"));
         let api = config.get_service("api").unwrap();
         assert_eq!(api.command, "./api-server");
-        assert_eq!(api.socket, "/tmp/{name}-{id}.sock");
+        assert_eq!(api.socket, "/tmp/tenement/{name}-{id}.sock");
     }
 
     #[test]
@@ -571,7 +576,7 @@ command = "./api-server"
         assert!(config.service.contains_key("api"));
         let api = config.get_service("api").unwrap();
         assert_eq!(api.command, "./api-server");
-        assert_eq!(api.socket, "/tmp/{name}-{id}.sock");
+        assert_eq!(api.socket, "/tmp/tenement/{name}-{id}.sock");
     }
 
     #[test]
@@ -619,7 +624,7 @@ default = "api"
         let config_str = r#"
 [service.api]
 command = "./api"
-socket = "/tmp/{name}-{id}.sock"
+socket = "/tmp/tenement/{name}-{id}.sock"
 
 [service.api.env]
 DB = "{data_dir}/{id}/app.db"

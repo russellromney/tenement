@@ -88,8 +88,8 @@ curl http://prod.api.localhost:8080/health
 
 # List instances
 ten ps
-# INSTANCE    PORT    UPTIME   HEALTH   WEIGHT
-# api:prod    30001   2m       healthy  100
+# INSTANCE      SOCKET                            UPTIME   HEALTH    WEIGHT
+# api:prod      /tmp/tenement/api-prod.sock       2m       healthy   100
 ```
 
 ### 6. Stop When Done
@@ -116,4 +116,4 @@ ten stop api:prod
 - [Configuration Reference](/guides/03-configuration) - Full config options
 - [Production Deployment](/guides/04-production) - TLS and systemd setup
 - [Deployment Patterns](/guides/05-deployments) - Blue-green and canary
-- [Economics](/intro/02-economics) - Why tenement saves money
+- [Why tenement?](/intro/02-economics) - The problem it solves
