@@ -80,6 +80,6 @@ Or it stops automatically after `idle_timeout` (5 minutes in this example).
 
 ## Next Steps
 
-- [Getting Started Guide](/guides/getting-started) - Detailed setup
-- [Configuration Reference](/guides/configuration) - All options
+- [Configuration Reference](/guides/03-configuration) - Full TOML config options
+- [Production Deployment](/guides/04-production) - TLS, systemd, and Caddy setup
 - [Use Cases](/use-cases/01-multitenant) - Real-world examples

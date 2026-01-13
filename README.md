@@ -1,31 +1,17 @@
 # tenement
 
-| Note: this is still early alpha
+> Early alpha
 
-**Hyperlightweight process hypervisor for single-server deployments.**
+**Lightweight process hypervisor for single-server deployments.**
 
-**Cramped housing for your processes.**
-
-Your apps don't need a penthouse - a roof, some supervision, and the occasional health check are probably fine. `tenement` packs processes into Unix sockets, watches them like a suspicious landlord, and restarts them when they misbehave.
-
----
-
-`tenement` (single-server hypervisor) is a lightweight Rust binary that manages processes/VMs on a single server. The speicfic goal is to easily "overstuff" semi-ephemeral processes into a server.
-
-`slum` (multi-server `tenement` orchestrator) is a lightwight Rust binary to horizontally scale `tenement` across a server fleet. 
-
-## The Stack
-
-- **tenement** - The building. Spawns and supervises processes/VMs.
-- **slum** - The neighborhood. Fleet orchestration across multiple tenements.
-- **tenant** - The occupant. Your app, paying rent in CPU cycles.
+Pack 100+ isolated services on a $5 VPS. Each customer gets their own process - spawn on demand, stop when idle, wake on first request.
 
 ## Features
 
 - Process supervision with auto-restart
 - Subdomain routing (`prod.api.example.com` → `api:prod`)
 - Weighted load balancing for canary/blue-green deployments
-- Integrated TLS with automatic Let's Encrypt certificates (in progress)
+- Integrated TLS with automatic Let's Encrypt certificates
 - Built-in dashboard (Svelte)
 - Prometheus metrics at `/metrics`
 - Log capture with full-text search
@@ -59,99 +45,78 @@ Bring your own environment. Use `uv`, `bun`, `deno`, or a compiled binary. No sh
 ## CLI
 
 ```bash
-ten serve              # Open for business (HTTP)
-ten serve --tls --domain example.com --email you@email.com  # HTTPS with Let's Encrypt
-ten spawn api --id prod # Move in a tenant
-ten stop api:prod      # Eviction
-ten ps                 # Census (shows weight column)
-ten weight api:prod 50 # Set traffic weight (0-100)
-ten token-gen          # New keys
-ten install            # Install as systemd service
-ten caddy              # Generate Caddyfile for HTTPS (alternative to --tls)
+ten serve                                                    # Start server (HTTP)
+ten serve --tls --domain example.com --email you@email.com   # HTTPS with Let's Encrypt
+ten spawn api --id prod   # Start instance
+ten stop api:prod         # Stop instance
+ten ps                    # List instances (with weights)
+ten weight api:prod 50    # Set traffic weight (0-100)
+ten token-gen             # Generate auth token
+ten install               # Install as systemd service
+ten caddy                 # Generate Caddyfile for HTTPS
 ```
 
 ## Routing
 
 ```
-prod.api.example.com   → api:prod (direct routing)
-staging.web.example.com → web:staging (direct routing)
-api.example.com        → weighted routing across all api instances
-example.com            → dashboard (the lobby)
+{id}.{service}.{domain}  → direct to instance     (prod.api.example.com → api:prod)
+{service}.{domain}       → weighted load balance  (api.example.com → all api:* instances)
+{domain}                 → dashboard
 ```
 
-**Weighted routing:** Requests to `{process}.{domain}` are load-balanced across all instances using weighted random selection. Set weights with `ten weight api:v1 90` for canary deployments.
+Use `ten weight api:v1 90` to shift traffic for canary deployments.
 
 ## API
 
 ```
-GET /              Dashboard
-GET /health        Building inspection
-GET /metrics       Utility bills (Prometheus)
-GET /api/instances Tenant registry
-GET /api/logs      Complaint box
+GET /              Dashboard (web UI)
+GET /health        Health check
+GET /metrics       Prometheus metrics
+GET /api/instances Instance list (auth required)
+GET /api/logs      Log search (auth required)
 ```
+
+API endpoints require `Authorization: Bearer <token>` header. Generate tokens with `ten token-gen`.
 
 ## Configuration
 
 ```toml
 # tenement.toml
 [settings]
-health_check_interval = 10   # Health check every 10s
-max_restarts = 3             # Max restarts in window
-restart_window = 300         # 5 minute restart window
-backoff_base_ms = 1000       # Exponential backoff base (1s)
-backoff_max_ms = 60000       # Max backoff delay (60s)
+data_dir = "/var/lib/tenement"
 
 [service.api]
 command = "uv run python app.py"
-socket = "/tmp/tenement/api-{id}.sock"
+socket = "/tmp/tenement/api-{id}.sock"   # {id} = instance ID
 health = "/health"
-startup_timeout = 10         # Max 10s to create socket
-idle_timeout = 300           # Auto-stop after 5 mins idle
-restart = "on-failure"       # Restart policy: always, on-failure, never
-isolation = "namespace"      # Isolation: process, namespace, sandbox
+idle_timeout = 300           # Auto-stop after 5 mins idle (0 = never)
+restart = "on-failure"       # always | on-failure | never
+isolation = "namespace"      # process | namespace | sandbox
+memory_limit_mb = 256        # cgroups v2 (Linux)
+cpu_shares = 100             # cgroups v2 (Linux)
+storage_quota_mb = 100       # Max disk per instance
 
-# Resource limits (cgroups v2, Linux only)
-memory_limit_mb = 256        # Memory limit in MB
-cpu_shares = 100             # CPU weight (1-10000)
+[service.api.env]
+DATABASE_PATH = "{data_dir}/{id}/app.db"
 
-# Instances to spawn on startup
 [instances]
-api = ["prod", "staging"]    # Spawn api:prod and api:staging on boot
+api = ["prod", "staging"]    # Auto-spawn on `ten serve`
 ```
 
-**Instance auto-start:** Instances listed in `[instances]` spawn automatically when `ten serve` starts. Individual spawn failures are logged but don't block other instances.
-
-**Hibernation:** Set `idle_timeout` to auto-stop idle instances. They wake automatically on first request.
-
-**Restarts:** Failed instances restart with exponential backoff (1s → 2s → 4s → ... → 60s max).
-
-**Resource limits:** Set `memory_limit_mb` and `cpu_shares` to constrain instance resources via cgroups v2.
+- **`{id}`** in paths is replaced with instance ID (e.g., `api-prod.sock`)
+- **`idle_timeout`** enables scale-to-zero: instances stop when idle, wake on request
+- **`[instances]`** spawns listed instances on startup
 
 ## Fleet Mode (slum)
 
-When one tenement isn't enough:
+`slum` orchestrates tenement across multiple servers - route tenants to specific servers, balance load, geographic distribution.
 
 ```rust
 use slum::{SlumDb, Server, Tenant};
 
 let db = SlumDb::init("slum.db").await?;
-
-// Add buildings to the slum
-db.add_server(&Server {
-    id: "east".into(),
-    url: "http://east.example.com".into(),
-    ..Default::default()
-}).await?;
-
-// Assign tenants to buildings
-db.add_tenant(&Tenant {
-    domain: "customer.example.com".into(),
-    server_id: "east".into(),
-    process: "api".into(),
-    instance_id: "prod".into(),
-    ..Default::default()
-}).await?;
+db.add_server(&Server { id: "east".into(), url: "http://east.example.com".into(), ..Default::default() }).await?;
+db.add_tenant(&Tenant { domain: "customer.example.com".into(), server_id: "east".into(), process: "api".into(), instance_id: "prod".into(), ..Default::default() }).await?;
 ```
 
 ## Why?
@@ -169,142 +134,35 @@ tenement: sub-second cold starts, zero network overhead, one config file.
 
 ## Isolation Levels
 
-```toml
-# Namespace isolation (default) - /proc isolation, zero overhead
-[service.api]
-command = "uv run python app.py"
-# isolation = "namespace" (implicit default)
-
-# Bare process - no isolation, for debugging
-[service.debug]
-command = "uv run python app.py"
-isolation = "process"
-
-# gVisor sandbox - syscall filtering for untrusted code
-[service.untrusted]
-command = "./third-party"
-isolation = "sandbox"
-
-# With resource limits (cgroups v2)
-[service.worker]
-command = "./worker"
-memory_limit_mb = 256    # Memory limit in MB
-cpu_shares = 200         # CPU weight (1-10000, default 100)
-```
-
-Same routing, same supervision, same API. Some tenants get curtains, some get walls.
-
-### Isolation Spectrum
-
-| Isolation | Tool | Overhead | Startup | Use Case |
-|-----------|------|----------|---------|----------|
-| `process` | bare | ~0 | <10ms | Same trust boundary, debugging |
-| `namespace` | unshare | ~0 | <10ms | **Default** - trusted code, /proc isolated |
-| `sandbox` | gVisor | ~20MB | <100ms | Untrusted/multi-tenant code |
-| `firecracker` | microVM | ~128MB | ~125ms | Compliance, custom kernel |
-
-**Namespace isolation** (default) uses Linux namespaces (PID + Mount) to give each process its own view of `/proc`. Environment variables are hidden between services. Zero overhead, zero dependencies (kernel built-in since 2008). Requires Linux.
-
-**Sandbox isolation** uses gVisor (runsc) to filter syscalls. ~20MB memory overhead, <100ms startup. Perfect for untrusted third-party code. Requires `--features sandbox` and gVisor installed.
-
-### Resource Limits
-
-Apply memory and CPU limits via cgroups v2 (Linux only):
+| Level | Overhead | Use Case |
+|-------|----------|----------|
+| `process` | ~0 | Debugging, same trust boundary |
+| `namespace` | ~0 | **Default** - /proc isolated, env vars hidden |
+| `sandbox` | ~20MB | Untrusted code (gVisor syscall filtering) |
 
 ```toml
 [service.api]
-command = "./api"
-memory_limit_mb = 512    # Hard memory limit
-cpu_shares = 500         # CPU weight (higher = more CPU time)
+isolation = "namespace"      # Default
+memory_limit_mb = 256        # cgroups v2 memory limit
+cpu_shares = 100             # cgroups v2 CPU weight
 ```
 
-Resource limits work with all isolation levels (process, namespace, sandbox).
+Namespace isolation uses Linux PID + Mount namespaces (kernel built-in). Sandbox requires gVisor and `--features sandbox`.
 
 ## Development
 
-### Testing
-
-340+ tests + 8 benchmarks covering all core modules:
-
 ```bash
-cd tenement && cargo test
-# test result: ok. 340+ passed
-
-cargo bench --bench performance
-# 8 benchmarks, all passing targets
+cargo test          # 340+ tests
+cargo bench         # 8 benchmarks
 ```
 
-Tests use real processes (`sleep`, `echo`, `env`) and TempDir for file operations—no mocking.
-
-| Module | Tests |
-|--------|-------|
-| Hypervisor | 32 |
-| Instance | 48 |
-| Cgroup | 26 |
-| Runtime | 25 |
-| Logs | 45 |
-| Store | 34 |
-| Auth | 22 |
-| Config | 39 |
-| CLI (unit) | 18 |
-| Auth Integration | 38 |
-| Hypervisor Integration | 10 |
-| E2E Lifecycle | 12 |
-| Stress Tests | 7 |
-| Slum Integration | 20 |
-| Benchmarks | 8 |
-
-See [TEST_PLAN.md](TEST_PLAN.md) for unit test breakdown.
-See [E2E_TESTING_PLAN.md](E2E_TESTING_PLAN.md) for integration test plan.
+Tests use real processes and TempDir - no mocking.
 
 ## Roadmap
 
-See [ROADMAP.md](ROADMAP.md) for the full isolation spectrum vision.
+See [ROADMAP.md](ROADMAP.md) for details.
 
-**Done:**
-- Hibernation - Scale to zero, wake on request
-- Exponential backoff restarts
-- Namespace isolation - Zero-overhead `/proc` protection (Linux)
-- Sandbox isolation (gVisor) - Syscall filtering for untrusted code
-- Resource limits - Memory and CPU limits via cgroups v2
-- Comprehensive test suite (340+ tests + 8 benchmarks)
-- Unix socket proxy - Full request routing to backends
-- Auth middleware - Bearer token authentication on API endpoints
-- Foreign key enforcement in slum fleet orchestration
-- E2E test infrastructure (Session 1) - shared utilities and fixture scripts
-- Auth integration tests (Session 2) - 38 comprehensive auth tests
-- Hypervisor integration tests (Session 3) - 10 tests for hypervisor + server + storage
-- E2E lifecycle tests (Session 4) - 12 tests for instance lifecycle
-- Stress tests (Session 6) - 7 concurrent load tests
-- Performance benchmarks (Session 7) - 8 criterion benchmarks, all passing targets
-- Slum integration tests (Session 8) - 20 fleet orchestration tests
-- Race condition fix - Atomic get-and-touch for proxy requests
-- Improved logging - Cgroup cleanup, auth failures, CPU weight clamping
-- Dashboard caching - Cache-Control headers for static assets
-- Storage quotas per instance - Directory size monitoring with soft limits, 30 tests
-  - Config: `storage_quota_mb` and `storage_persist` per service
-  - Prometheus metrics: `instance_storage_bytes`, `instance_storage_quota_bytes`, `instance_storage_usage_ratio`
-  - API: `GET /api/instances/:id/storage`
-  - Dashboard: Storage column with color-coded usage
-- Instance auto-start - Declare instances in `[instances]` that spawn on `ten serve`
-  - Config: `[instances]` section maps services to instance IDs
-  - Validates references to defined services at config load time
-  - Continues spawning on individual failures (logs errors, doesn't block)
-- Production setup - One-command deployment with HTTPS
-  - `ten install` - Install tenement as systemd service with security hardening
-  - `ten uninstall` - Clean removal of systemd service
-  - `ten caddy` - Generate Caddyfile with automatic HTTPS via Let's Encrypt
-  - Supports `--dry-run`, `--install` (install Caddy), `--systemd` (enable service)
-- Weighted routing for canary/blue-green deployments
-  - `ten weight api:v2 50` - Set instance traffic weight (0-100)
-  - Requests to `{process}.{domain}` load-balanced by weight
-  - Weight 0 excludes instance from traffic
-  - `ten ps` shows weight column
-
-**Next up:**
-- Integrated TLS - Zero-setup HTTPS with Let's Encrypt (`ten serve --tls --domain example.com`)
-- Deploy commands (`ten deploy`, `ten route`) for blue/green deployments
-- Slum health check loop
+**Next:** `ten deploy` / `ten route` commands, slum health checks
 
 ## License
 

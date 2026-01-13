@@ -221,5 +221,5 @@ For most workloads, namespace isolation is the sweet spot: nearly native perform
 
 ## Next Steps
 
-- [Configuration Reference](/guides/configuration) - Set isolation in config
-- [Getting Started](/guides/getting-started) - Complete setup guide
+- [Configuration Reference](/guides/03-configuration) - Set isolation in config
+- [Production Deployment](/guides/04-production) - Deploy with TLS and systemd

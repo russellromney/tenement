@@ -235,5 +235,5 @@ slum enforces referential integrity:
 
 ## Next Steps
 
-- [Getting Started](/guides/getting-started) - Single-server setup
-- [Configuration](/guides/configuration) - tenement config reference
+- [Quick Start](/intro/01-quick-start) - Single-server setup
+- [Configuration Reference](/guides/03-configuration) - tenement config reference
