@@ -533,10 +533,11 @@ Weighted routing, blue/green deployments, and canary releases.
 - [x] Weight 0 excludes instance from traffic
 - [x] 11 new tests for weighted routing
 
-**Session 2: Deploy Commands - TODO**
-- [ ] `ten deploy api --version v2` - spawn + wait healthy
-- [ ] `ten route api --from v1 --to v2` - atomic swap
-- [ ] Instance version tagging
+**Session 2: Deploy Commands - DONE**
+- [x] `ten deploy api --version v2` - spawn + wait healthy
+- [x] `ten route api --from v1 --to v2` - atomic swap
+- [x] Instance version tagging (version becomes instance ID)
+- [x] 11 new tests (deploy, route, blue/green workflow, canary workflow)
 
 **Session 3: Slum Health Loop - TODO**
 - [ ] Background health check polling

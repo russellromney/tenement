@@ -88,7 +88,10 @@ pub struct Instance {
     pub id: InstanceId,
     pub handle: RuntimeHandle,
     pub runtime_type: RuntimeType,
+    /// Unix socket path (used when port is None)
     pub socket: PathBuf,
+    /// TCP port (when Some, service listens on 127.0.0.1:{port} instead of socket)
+    pub port: Option<u16>,
     pub started_at: Instant,
     pub restarts: u32,
     pub consecutive_failures: u32,
@@ -113,12 +116,28 @@ pub struct Instance {
     pub weight: u8,
 }
 
+impl Instance {
+    /// Check if this instance uses TCP port instead of Unix socket
+    pub fn uses_port(&self) -> bool {
+        self.port.is_some()
+    }
+
+    /// Get the TCP address if using port mode
+    pub fn tcp_addr(&self) -> Option<String> {
+        self.port.map(|p| format!("127.0.0.1:{}", p))
+    }
+}
+
 /// Instance info for display (serializable)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InstanceInfo {
     pub id: InstanceId,
     pub runtime: RuntimeType,
+    /// Unix socket path (only used when port is None)
     pub socket: PathBuf,
+    /// TCP port (when Some, service listens on 127.0.0.1:{port})
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub port: Option<u16>,
     pub uptime_secs: u64,
     pub restarts: u32,
     pub health: HealthStatus,
@@ -137,6 +156,27 @@ pub struct InstanceInfo {
     pub weight: u8,
 }
 
+impl InstanceInfo {
+    /// Check if this instance uses TCP port instead of Unix socket
+    pub fn uses_port(&self) -> bool {
+        self.port.is_some()
+    }
+
+    /// Get the TCP address if using port mode
+    pub fn tcp_addr(&self) -> Option<String> {
+        self.port.map(|p| format!("127.0.0.1:{}", p))
+    }
+
+    /// Get the listen address as a string (for display)
+    pub fn listen_addr(&self) -> String {
+        if let Some(port) = self.port {
+            format!("127.0.0.1:{}", port)
+        } else {
+            self.socket.display().to_string()
+        }
+    }
+}
+
 use std::time::Duration;
 
 impl Instance {
@@ -145,6 +185,7 @@ impl Instance {
             id: self.id.clone(),
             runtime: self.runtime_type,
             socket: self.socket.clone(),
+            port: self.port,
             uptime_secs: self.started_at.elapsed().as_secs(),
             restarts: self.restarts,
             health: self.health_status,
@@ -478,6 +519,7 @@ mod tests {
             id: InstanceId::new("api", "user1"),
             runtime: RuntimeType::Process,
             socket: PathBuf::from("/tmp/test.sock"),
+            port: None,
             uptime_secs: 3600,
             restarts: 2,
             health: HealthStatus::Healthy,
@@ -514,6 +556,7 @@ mod tests {
             id: InstanceId::new("api", "user1"),
             runtime: RuntimeType::Namespace,
             socket: PathBuf::from("/tmp/test.sock"),
+            port: None,
             uptime_secs: 100,
             restarts: 0,
             health: HealthStatus::Unknown,
@@ -703,6 +746,7 @@ mod tests {
             id: InstanceId::new("api", "user1"),
             runtime: RuntimeType::Process,
             socket: PathBuf::from("/tmp/test.sock"),
+            port: None,
             uptime_secs: 100,
             restarts: 1,
             health: HealthStatus::Healthy,
@@ -731,6 +775,7 @@ mod tests {
             id: InstanceId::new("api", "user1"),
             runtime: RuntimeType::Namespace,
             socket: PathBuf::from("/tmp/test.sock"),
+            port: None,
             uptime_secs: 100,
             restarts: 0,
             health: HealthStatus::Unknown,
@@ -758,6 +803,7 @@ mod tests {
             id: InstanceId::new("api", "user1"),
             runtime: RuntimeType::Process,
             socket: PathBuf::from("/tmp/test.sock"),
+            port: None,
             uptime_secs: 100,
             restarts: 0,
             health: HealthStatus::Healthy,
@@ -780,6 +826,7 @@ mod tests {
             id: InstanceId::new("api", "user1"),
             runtime: RuntimeType::Process,
             socket: PathBuf::from("/tmp/test.sock"),
+            port: None,
             uptime_secs: 100,
             restarts: 0,
             health: HealthStatus::Healthy,
@@ -806,6 +853,7 @@ mod tests {
             id: InstanceId::new("api", "user1"),
             runtime: RuntimeType::Process,
             socket: PathBuf::from("/tmp/test.sock"),
+            port: None,
             uptime_secs: 100,
             restarts: 0,
             health: HealthStatus::Healthy,
@@ -827,6 +875,7 @@ mod tests {
             id: InstanceId::new("api", "user1"),
             runtime: RuntimeType::Process,
             socket: PathBuf::from("/tmp/test.sock"),
+            port: None,
             uptime_secs: 100,
             restarts: 0,
             health: HealthStatus::Healthy,

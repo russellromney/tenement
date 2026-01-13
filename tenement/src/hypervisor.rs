@@ -178,8 +178,12 @@ impl Hypervisor {
         // Merge extra env vars
         env.extend(extra_env);
 
-        // Add socket path to env
-        env.insert("SOCKET_PATH".to_string(), socket.to_string_lossy().to_string());
+        // Add socket path or port to env based on config
+        if let Some(port) = process_config.port {
+            env.insert("PORT".to_string(), port.to_string());
+        } else {
+            env.insert("SOCKET_PATH".to_string(), socket.to_string_lossy().to_string());
+        }
 
         // Build spawn config
         let spawn_config = SpawnConfig {
@@ -268,6 +272,7 @@ impl Hypervisor {
             handle,
             runtime_type,
             socket: socket.clone(),
+            port: process_config.port,
             started_at: now,
             restarts: 0,
             consecutive_failures: 0,
@@ -291,16 +296,30 @@ impl Hypervisor {
         // Update metrics
         self.metrics.instances_up.inc();
 
-        // Wait for socket to be created
-        for _ in 0..50 {
-            if socket.exists() {
-                info!("Instance {} ready at {:?}", instance_id, socket);
-                return Ok(socket);
+        // Wait for service to be ready
+        if let Some(port) = process_config.port {
+            // TCP mode: try to connect
+            let addr = format!("127.0.0.1:{}", port);
+            for _ in 0..50 {
+                if tokio::net::TcpStream::connect(&addr).await.is_ok() {
+                    info!("Instance {} ready at {}", instance_id, addr);
+                    return Ok(socket);
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
             }
-            tokio::time::sleep(Duration::from_millis(10)).await;
+            warn!("Instance {} TCP port {} not ready after 500ms", instance_id, port);
+        } else {
+            // Socket mode: check if file exists
+            for _ in 0..50 {
+                if socket.exists() {
+                    info!("Instance {} ready at {:?}", instance_id, socket);
+                    return Ok(socket);
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            warn!("Instance {} socket not ready after 500ms", instance_id);
         }
 
-        warn!("Instance {} socket not ready after 500ms", instance_id);
         Ok(socket)
     }
 
@@ -862,6 +881,100 @@ impl Hypervisor {
         anyhow::bail!("Instance {} failed to start within {} seconds",
             InstanceId::new(process_name, id), timeout_secs)
     }
+
+    /// Deploy a new instance version and wait for it to be healthy.
+    /// Used for blue/green and canary deployments.
+    ///
+    /// - Spawns the instance with the given version as the instance ID
+    /// - Sets the initial weight (default 100)
+    /// - Waits for health check to pass (timeout ~30s)
+    /// - Returns error if health check fails within timeout
+    pub async fn deploy_and_wait_healthy(
+        &self,
+        process_name: &str,
+        version: &str,
+        initial_weight: u8,
+        timeout_secs: u64,
+    ) -> Result<PathBuf> {
+        let instance_id = InstanceId::new(process_name, version);
+
+        // Spawn the instance
+        let socket = self.spawn(process_name, version).await?;
+
+        // Set initial weight
+        self.set_weight(process_name, version, initial_weight).await?;
+
+        // Wait for health check to pass
+        let check_interval = Duration::from_millis(500);
+        let timeout = Duration::from_secs(timeout_secs);
+        let start = Instant::now();
+
+        while start.elapsed() < timeout {
+            let status = self.check_health(process_name, version).await;
+            match status {
+                HealthStatus::Healthy => {
+                    info!("Instance {} is healthy", instance_id);
+                    return Ok(socket);
+                }
+                HealthStatus::Failed => {
+                    anyhow::bail!("Instance {} health check failed permanently", instance_id);
+                }
+                _ => {
+                    // Unknown, Degraded, or Unhealthy - keep waiting
+                    tokio::time::sleep(check_interval).await;
+                }
+            }
+        }
+
+        // Timeout reached - stop the unhealthy instance and return error
+        let _ = self.stop(process_name, version).await;
+        anyhow::bail!(
+            "Instance {} did not become healthy within {} seconds",
+            instance_id,
+            timeout_secs
+        )
+    }
+
+    /// Atomically swap traffic weights between two versions.
+    /// Sets `from_version` weight to 0 and `to_version` weight to 100.
+    /// Used for blue/green instant cutover.
+    ///
+    /// Returns error if either version is not running.
+    pub async fn route_swap(
+        &self,
+        process_name: &str,
+        from_version: &str,
+        to_version: &str,
+    ) -> Result<()> {
+        let from_id = InstanceId::new(process_name, from_version);
+        let to_id = InstanceId::new(process_name, to_version);
+
+        // Acquire write lock and update both weights atomically
+        let mut instances = self.instances.write().await;
+
+        // Verify both instances exist
+        if !instances.contains_key(&from_id) {
+            anyhow::bail!("Instance {} not found", from_id);
+        }
+        if !instances.contains_key(&to_id) {
+            anyhow::bail!("Instance {} not found", to_id);
+        }
+
+        // Atomically update weights
+        if let Some(from_instance) = instances.get_mut(&from_id) {
+            from_instance.weight = 0;
+        }
+        if let Some(to_instance) = instances.get_mut(&to_id) {
+            to_instance.weight = 100;
+        }
+
+        info!(
+            "Traffic swap complete: {} weight=0, {} weight=100",
+            from_id, to_id
+        );
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -881,6 +994,7 @@ mod tests {
             command: command.to_string(),
             args: args.into_iter().map(|s| s.to_string()).collect(),
             socket: "/tmp/{name}-{id}.sock".to_string(),
+            port: None,
             isolation: RuntimeType::Process,
             health: None,
             env: HashMap::new(),
@@ -1651,6 +1765,7 @@ sleep 30
                 command: "/nonexistent/binary".to_string(),
                 args: vec![],
                 socket: "/tmp/{name}-{id}.sock".to_string(),
+                port: None,
                 isolation: RuntimeType::Process,
                 health: None,
                 env: HashMap::new(),
@@ -1890,6 +2005,240 @@ sleep 30
         assert!(v1_ratio > 0.75, "v1 ratio {} should be > 0.75", v1_ratio);
         assert!(v1_ratio < 0.98, "v1 ratio {} should be < 0.98", v1_ratio);
 
+        hypervisor.stop("api", "v1").await.ok();
+        hypervisor.stop("api", "v2").await.ok();
+    }
+
+    // ===================
+    // DEPLOY COMMAND TESTS
+    // ===================
+
+    #[tokio::test]
+    async fn test_deploy_and_wait_healthy_no_health_endpoint() {
+        // When no health endpoint is configured, instance is healthy if socket exists
+        let dir = TempDir::new().unwrap();
+        let script = create_touch_socket_script(dir.path());
+
+        let config = test_config_with_process("api", script.to_str().unwrap(), vec![]);
+        let hypervisor = Hypervisor::new(config);
+
+        // Deploy v2 with default weight
+        let result = hypervisor.deploy_and_wait_healthy("api", "v2", 100, 5).await;
+        assert!(result.is_ok(), "Deploy should succeed: {:?}", result.err());
+
+        // Verify instance is running with correct weight
+        let info = hypervisor.get("api", "v2").await.unwrap();
+        assert_eq!(info.weight, 100);
+
+        hypervisor.stop("api", "v2").await.ok();
+    }
+
+    #[tokio::test]
+    async fn test_deploy_with_initial_weight() {
+        // Deploy with a low initial weight (canary style)
+        let dir = TempDir::new().unwrap();
+        let script = create_touch_socket_script(dir.path());
+
+        let config = test_config_with_process("api", script.to_str().unwrap(), vec![]);
+        let hypervisor = Hypervisor::new(config);
+
+        // Deploy v2 with 10% weight
+        let result = hypervisor.deploy_and_wait_healthy("api", "v2", 10, 5).await;
+        assert!(result.is_ok());
+
+        // Verify weight was set
+        let info = hypervisor.get("api", "v2").await.unwrap();
+        assert_eq!(info.weight, 10);
+
+        hypervisor.stop("api", "v2").await.ok();
+    }
+
+    #[tokio::test]
+    async fn test_deploy_unknown_process() {
+        let config = Config::default();
+        let hypervisor = Hypervisor::new(config);
+
+        let result = hypervisor.deploy_and_wait_healthy("nonexistent", "v1", 100, 5).await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Unknown process"));
+    }
+
+    // ===================
+    // ROUTE SWAP TESTS
+    // ===================
+
+    #[tokio::test]
+    async fn test_route_swap() {
+        let dir = TempDir::new().unwrap();
+        let script = create_touch_socket_script(dir.path());
+
+        let config = test_config_with_process("api", script.to_str().unwrap(), vec![]);
+        let hypervisor = Hypervisor::new(config);
+
+        // Spawn v1 and v2
+        hypervisor.spawn("api", "v1").await.unwrap();
+        hypervisor.spawn("api", "v2").await.unwrap();
+
+        // Initially both have weight 100
+        let v1_info = hypervisor.get("api", "v1").await.unwrap();
+        let v2_info = hypervisor.get("api", "v2").await.unwrap();
+        assert_eq!(v1_info.weight, 100);
+        assert_eq!(v2_info.weight, 100);
+
+        // Swap traffic from v1 to v2
+        let result = hypervisor.route_swap("api", "v1", "v2").await;
+        assert!(result.is_ok());
+
+        // Verify weights swapped atomically
+        let v1_info = hypervisor.get("api", "v1").await.unwrap();
+        let v2_info = hypervisor.get("api", "v2").await.unwrap();
+        assert_eq!(v1_info.weight, 0);
+        assert_eq!(v2_info.weight, 100);
+
+        hypervisor.stop("api", "v1").await.ok();
+        hypervisor.stop("api", "v2").await.ok();
+    }
+
+    #[tokio::test]
+    async fn test_route_swap_from_not_found() {
+        let dir = TempDir::new().unwrap();
+        let script = create_touch_socket_script(dir.path());
+
+        let config = test_config_with_process("api", script.to_str().unwrap(), vec![]);
+        let hypervisor = Hypervisor::new(config);
+
+        // Only spawn v2
+        hypervisor.spawn("api", "v2").await.unwrap();
+
+        // Try to swap from non-existent v1
+        let result = hypervisor.route_swap("api", "v1", "v2").await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("not found"));
+
+        hypervisor.stop("api", "v2").await.ok();
+    }
+
+    #[tokio::test]
+    async fn test_route_swap_to_not_found() {
+        let dir = TempDir::new().unwrap();
+        let script = create_touch_socket_script(dir.path());
+
+        let config = test_config_with_process("api", script.to_str().unwrap(), vec![]);
+        let hypervisor = Hypervisor::new(config);
+
+        // Only spawn v1
+        hypervisor.spawn("api", "v1").await.unwrap();
+
+        // Try to swap to non-existent v2
+        let result = hypervisor.route_swap("api", "v1", "v2").await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("not found"));
+
+        hypervisor.stop("api", "v1").await.ok();
+    }
+
+    #[tokio::test]
+    async fn test_route_swap_weighted_routing() {
+        // Verify that after route swap, only the target version receives traffic
+        let dir = TempDir::new().unwrap();
+        let script = create_touch_socket_script(dir.path());
+
+        let config = test_config_with_process("api", script.to_str().unwrap(), vec![]);
+        let hypervisor = Hypervisor::new(config);
+
+        hypervisor.spawn("api", "v1").await.unwrap();
+        hypervisor.spawn("api", "v2").await.unwrap();
+
+        // Route all traffic from v1 to v2
+        hypervisor.route_swap("api", "v1", "v2").await.unwrap();
+
+        // All weighted selections should now go to v2 (v1 has weight 0)
+        for _ in 0..10 {
+            let selected = hypervisor.select_weighted("api").await;
+            assert!(selected.is_some());
+            assert_eq!(selected.unwrap().id.id, "v2");
+        }
+
+        hypervisor.stop("api", "v1").await.ok();
+        hypervisor.stop("api", "v2").await.ok();
+    }
+
+    #[tokio::test]
+    async fn test_blue_green_workflow() {
+        // Full blue/green deployment workflow
+        let dir = TempDir::new().unwrap();
+        let script = create_touch_socket_script(dir.path());
+
+        let config = test_config_with_process("api", script.to_str().unwrap(), vec![]);
+        let hypervisor = Hypervisor::new(config);
+
+        // 1. Deploy v1 (blue) initially
+        hypervisor.deploy_and_wait_healthy("api", "v1", 100, 5).await.unwrap();
+
+        // 2. Deploy v2 (green) with weight 0 (no traffic yet)
+        hypervisor.deploy_and_wait_healthy("api", "v2", 0, 5).await.unwrap();
+
+        // At this point, all traffic goes to v1
+        for _ in 0..5 {
+            let selected = hypervisor.select_weighted("api").await;
+            assert_eq!(selected.unwrap().id.id, "v1");
+        }
+
+        // 3. Atomic swap: route all traffic from v1 to v2
+        hypervisor.route_swap("api", "v1", "v2").await.unwrap();
+
+        // Now all traffic goes to v2
+        for _ in 0..5 {
+            let selected = hypervisor.select_weighted("api").await;
+            assert_eq!(selected.unwrap().id.id, "v2");
+        }
+
+        // 4. Stop old version v1
+        hypervisor.stop("api", "v1").await.unwrap();
+
+        // Only v2 remains
+        let instances = hypervisor.list_by_process("api").await;
+        assert_eq!(instances.len(), 1);
+        assert_eq!(instances[0].id.id, "v2");
+
+        hypervisor.stop("api", "v2").await.ok();
+    }
+
+    #[tokio::test]
+    async fn test_canary_workflow() {
+        // Full canary deployment workflow
+        let dir = TempDir::new().unwrap();
+        let script = create_touch_socket_script(dir.path());
+
+        let config = test_config_with_process("api", script.to_str().unwrap(), vec![]);
+        let hypervisor = Hypervisor::new(config);
+
+        // 1. v1 is running with full traffic
+        hypervisor.deploy_and_wait_healthy("api", "v1", 100, 5).await.unwrap();
+
+        // 2. Deploy v2 with 10% traffic (canary)
+        hypervisor.deploy_and_wait_healthy("api", "v2", 10, 5).await.unwrap();
+
+        // Traffic split is now roughly 91% v1, 9% v2 (100:10 ratio)
+        let v1_info = hypervisor.get("api", "v1").await.unwrap();
+        let v2_info = hypervisor.get("api", "v2").await.unwrap();
+        assert_eq!(v1_info.weight, 100);
+        assert_eq!(v2_info.weight, 10);
+
+        // 3. Increase v2 weight to 50%
+        hypervisor.set_weight("api", "v2", 50).await.unwrap();
+
+        // 4. Full rollout: set v1=0, v2=100
+        hypervisor.set_weight("api", "v1", 0).await.unwrap();
+        hypervisor.set_weight("api", "v2", 100).await.unwrap();
+
+        // All traffic now goes to v2
+        for _ in 0..5 {
+            let selected = hypervisor.select_weighted("api").await;
+            assert_eq!(selected.unwrap().id.id, "v2");
+        }
+
+        // 5. Stop v1
         hypervisor.stop("api", "v1").await.ok();
         hypervisor.stop("api", "v2").await.ok();
     }

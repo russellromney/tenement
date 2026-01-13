@@ -1,0 +1,9 @@
+# Build artifacts
+apps/go/go-worker
+apps/rust/target/
+
+# Runtime data
+data/
+
+# Sockets
+*.sock

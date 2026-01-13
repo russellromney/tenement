@@ -1,0 +1,74 @@
+# Multi-Environment Example
+#
+# Demonstrates:
+# - 4 apps in different languages (Python, Node, Go, Rust)
+# - 2 environments per app (prod, staging)
+# - Different isolation levels
+# - Both TCP ports (easier) and Unix sockets (faster)
+#
+# Run with: ten serve --port 8080 --domain localhost
+#
+# Access apps via subdomains:
+#   curl http://prod.api.localhost:8080/          # Python API (prod)
+#   curl http://staging.api.localhost:8080/       # Python API (staging)
+#   curl http://web.localhost:8080/               # Node Web (weighted routing)
+#   curl http://prod.worker.localhost:8080/       # Go Worker (prod)
+#   curl http://cache.localhost:8080/             # Rust Cache (weighted routing)
+
+[settings]
+data_dir = "./data"
+health_check_interval = 30
+
+# ==============================================================================
+# Python API - TCP port (easier for development)
+# ==============================================================================
+[service.api]
+command = "python3 apps/python/server.py"
+port = 3001                                  # TCP port - sets PORT env var
+health = "/health"
+isolation = "process"                        # Use process for dev (namespace needs Linux)
+env = { APP_VERSION = "1.0.0" }
+
+# ==============================================================================
+# Node.js Web - TCP port (easier for development)
+# ==============================================================================
+[service.web]
+command = "node apps/node/server.js"
+port = 3002                                  # TCP port - sets PORT env var
+health = "/health"
+isolation = "process"
+env = { APP_VERSION = "2.1.0" }
+
+# ==============================================================================
+# Go Worker - Unix socket (faster for production)
+# ==============================================================================
+[service.worker]
+command = "apps/go/go-worker"                # Pre-compiled binary
+socket = "/tmp/tenement/{name}-{id}.sock"    # Unix socket - sets SOCKET_PATH env var
+health = "/health"
+isolation = "process"
+env = { APP_VERSION = "0.5.0" }
+memory_limit_mb = 128
+cpu_shares = 100
+
+# ==============================================================================
+# Rust Cache - Unix socket (faster for production)
+# ==============================================================================
+[service.cache]
+command = "apps/rust/target/release/rust-cache"  # Pre-compiled binary
+socket = "/tmp/tenement/{name}-{id}.sock"        # Unix socket
+health = "/health"
+isolation = "process"
+env = { APP_VERSION = "3.0.0" }
+memory_limit_mb = 64
+storage_quota_mb = 100
+idle_timeout = 300  # Auto-stop after 5 min idle
+
+# ==============================================================================
+# Auto-start instances on boot
+# ==============================================================================
+[instances]
+api = ["prod", "staging"]
+web = ["prod", "staging"]
+worker = ["prod"]
+cache = ["prod", "staging"]

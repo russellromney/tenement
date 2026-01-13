@@ -336,6 +336,22 @@ async fn stream_logs(
     Sse::new(stream).keep_alive(KeepAlive::default())
 }
 
+/// Instance connection info for proxying
+struct ProxyTarget {
+    socket: std::path::PathBuf,
+    port: Option<u16>,
+}
+
+impl ProxyTarget {
+    fn uses_tcp(&self) -> bool {
+        self.port.is_some()
+    }
+
+    fn tcp_addr(&self) -> Option<String> {
+        self.port.map(|p| format!("127.0.0.1:{}", p))
+    }
+}
+
 /// Handle incoming requests - route to dashboard or proxy to process
 async fn handle_request(
     Host(host): Host,
@@ -433,16 +449,27 @@ async fn proxy_to_instance(
             .into_response();
     }
 
-    let socket_path = match id {
+    let target = match id {
         Some(instance_id) => {
             // Direct routing to specific instance
             match state.hypervisor.get_and_touch(process, instance_id).await {
-                Some(info) => info.socket,
+                Some(info) => ProxyTarget {
+                    socket: info.socket,
+                    port: info.port,
+                },
                 None => {
                     // Wake-on-request: spawn and wait for instance to be ready
                     tracing::info!("Waking instance {}:{}", process, instance_id);
                     match state.hypervisor.spawn_and_wait(process, instance_id).await {
-                        Ok(socket) => socket,
+                        Ok(socket) => {
+                            // Get port info from the now-running instance
+                            let port = state
+                                .hypervisor
+                                .get(process, instance_id)
+                                .await
+                                .and_then(|info| info.port);
+                            ProxyTarget { socket, port }
+                        }
                         Err(e) => {
                             tracing::error!("Failed to wake instance {}:{}: {}", process, instance_id, e);
                             return (
@@ -461,7 +488,10 @@ async fn proxy_to_instance(
                 Some(info) => {
                     // Touch activity for the selected instance
                     state.hypervisor.touch_activity(process, &info.id.id).await;
-                    info.socket
+                    ProxyTarget {
+                        socket: info.socket,
+                        port: info.port,
+                    }
                 }
                 None => {
                     // No instances available - return 503
@@ -475,8 +505,12 @@ async fn proxy_to_instance(
         }
     };
 
-    // Proxy to Unix socket
-    proxy_to_unix_socket(&socket_path, req).await
+    // Proxy based on connection type
+    if let Some(addr) = target.tcp_addr() {
+        proxy_to_tcp(&state.client, &addr, req).await
+    } else {
+        proxy_to_unix_socket(&target.socket, req).await
+    }
 }
 
 /// Proxy an HTTP request to a Unix socket
@@ -524,6 +558,60 @@ async fn proxy_to_unix_socket(socket_path: &Path, req: Request<Body>) -> Respons
         }
         Err(e) => {
             tracing::error!("Proxy error to {}: {}", socket_path.display(), e);
+            (
+                StatusCode::BAD_GATEWAY,
+                format!("Proxy error: {}", e),
+            )
+                .into_response()
+        }
+    }
+}
+
+/// Proxy an HTTP request to a TCP address
+async fn proxy_to_tcp(
+    client: &Client<hyper_util::client::legacy::connect::HttpConnector, Body>,
+    addr: &str,
+    req: Request<Body>,
+) -> Response {
+    // Build URI for TCP connection
+    let path_and_query = req
+        .uri()
+        .path_and_query()
+        .map(|pq| pq.as_str())
+        .unwrap_or("/");
+    let uri = format!("http://{}{}", addr, path_and_query);
+
+    // Build proxy request preserving method and headers
+    let mut proxy_req = Request::builder()
+        .method(req.method())
+        .uri(&uri);
+
+    // Copy headers from original request
+    for (key, value) in req.headers() {
+        proxy_req = proxy_req.header(key, value);
+    }
+
+    let proxy_req = match proxy_req.body(req.into_body()) {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::error!("Failed to build proxy request: {}", e);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to build proxy request: {}", e),
+            )
+                .into_response();
+        }
+    };
+
+    // Forward request to TCP address
+    match client.request(proxy_req).await {
+        Ok(response) => {
+            // Convert hyper Response to axum Response
+            let (parts, body) = response.into_parts();
+            Response::from_parts(parts, Body::new(body))
+        }
+        Err(e) => {
+            tracing::error!("Proxy error to {}: {}", addr, e);
             (
                 StatusCode::BAD_GATEWAY,
                 format!("Proxy error: {}", e),

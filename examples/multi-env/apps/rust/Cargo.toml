@@ -1,0 +1,9 @@
+[package]
+name = "rust-cache"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+
+# Keep out of parent workspace
+[workspace]

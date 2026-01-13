@@ -130,8 +130,15 @@ pub struct ProcessConfig {
     pub args: Vec<String>,
 
     /// Unix socket path pattern (supports {name}, {id})
+    /// Used when `port` is not specified.
     #[serde(default = "default_socket")]
     pub socket: String,
+
+    /// TCP port for the service to listen on (alternative to socket)
+    /// When specified, the service listens on 127.0.0.1:{port} instead of a Unix socket.
+    /// The PORT environment variable is set automatically.
+    #[serde(default)]
+    pub port: Option<u16>,
 
     /// Health check endpoint (e.g., "/health")
     #[serde(default)]
@@ -367,6 +374,35 @@ impl Config {
     }
 }
 
+/// Listen address for a service - either a Unix socket path or a TCP address
+#[derive(Debug, Clone)]
+pub enum ListenAddr {
+    /// Unix socket path
+    Socket(PathBuf),
+    /// TCP address (host:port)
+    Tcp(String),
+}
+
+impl ListenAddr {
+    /// Check if this is a TCP address
+    pub fn is_tcp(&self) -> bool {
+        matches!(self, ListenAddr::Tcp(_))
+    }
+
+    /// Check if this is a Unix socket
+    pub fn is_socket(&self) -> bool {
+        matches!(self, ListenAddr::Socket(_))
+    }
+
+    /// Get the TCP port if this is a TCP address
+    pub fn port(&self) -> Option<u16> {
+        match self {
+            ListenAddr::Tcp(addr) => addr.split(':').last()?.parse().ok(),
+            ListenAddr::Socket(_) => None,
+        }
+    }
+}
+
 impl ProcessConfig {
     /// Validate config for the specified isolation level
     pub fn validate(&self, name: &str) -> Result<()> {
@@ -398,18 +434,34 @@ impl ProcessConfig {
         self.isolation
     }
 
+    /// Check if this service uses TCP port instead of Unix socket
+    pub fn uses_port(&self) -> bool {
+        self.port.is_some()
+    }
+
+    /// Get the listen address for an instance (socket path or TCP address)
+    pub fn listen_addr(&self, name: &str, id: &str) -> ListenAddr {
+        if let Some(port) = self.port {
+            ListenAddr::Tcp(format!("127.0.0.1:{}", port))
+        } else {
+            ListenAddr::Socket(self.socket_path(name, id))
+        }
+    }
+
     /// Interpolate variables in a string
-    /// Supports: {name}, {id}, {data_dir}, {socket}
+    /// Supports: {name}, {id}, {data_dir}, {socket}, {port}
     pub fn interpolate(&self, template: &str, name: &str, id: &str, data_dir: &Path) -> String {
         let socket = self.socket_path(name, id);
+        let port_str = self.port.map(|p| p.to_string()).unwrap_or_default();
         template
             .replace("{name}", name)
             .replace("{id}", id)
             .replace("{data_dir}", &data_dir.to_string_lossy())
             .replace("{socket}", &socket.to_string_lossy())
+            .replace("{port}", &port_str)
     }
 
-    /// Get the socket path for an instance
+    /// Get the socket path for an instance (used for Unix socket mode)
     pub fn socket_path(&self, name: &str, id: &str) -> PathBuf {
         let path = self.socket
             .replace("{name}", name)
@@ -1346,5 +1398,119 @@ worker = ["bg-1", "bg-2", "bg-3"]
         assert!(instances.contains(&("worker".to_string(), "bg-1".to_string())));
         assert!(instances.contains(&("worker".to_string(), "bg-2".to_string())));
         assert!(instances.contains(&("worker".to_string(), "bg-3".to_string())));
+    }
+
+    // ===================
+    // TCP PORT CONFIG TESTS
+    // ===================
+
+    #[test]
+    fn test_port_config() {
+        let config_str = r#"
+[service.api]
+command = "./api"
+port = 3000
+"#;
+        let config = Config::from_str(config_str).unwrap();
+        let api = config.get_service("api").unwrap();
+
+        assert_eq!(api.port, Some(3000));
+        assert!(api.uses_port());
+    }
+
+    #[test]
+    fn test_port_default_none() {
+        let config_str = r#"
+[service.api]
+command = "./api"
+"#;
+        let config = Config::from_str(config_str).unwrap();
+        let api = config.get_service("api").unwrap();
+
+        assert_eq!(api.port, None);
+        assert!(!api.uses_port());
+    }
+
+    #[test]
+    fn test_socket_with_no_port() {
+        let config_str = r#"
+[service.api]
+command = "./api"
+socket = "/tmp/api-{id}.sock"
+"#;
+        let config = Config::from_str(config_str).unwrap();
+        let api = config.get_service("api").unwrap();
+
+        assert_eq!(api.port, None);
+        assert!(!api.uses_port());
+        assert_eq!(api.socket_path("api", "test"), PathBuf::from("/tmp/api-test.sock"));
+    }
+
+    #[test]
+    fn test_listen_addr_tcp() {
+        let config_str = r#"
+[service.api]
+command = "./api"
+port = 8080
+"#;
+        let config = Config::from_str(config_str).unwrap();
+        let api = config.get_service("api").unwrap();
+
+        let addr = api.listen_addr("api", "test");
+        assert!(addr.is_tcp());
+        assert!(!addr.is_socket());
+        assert_eq!(addr.port(), Some(8080));
+    }
+
+    #[test]
+    fn test_listen_addr_socket() {
+        let config_str = r#"
+[service.api]
+command = "./api"
+socket = "/tmp/api-{id}.sock"
+"#;
+        let config = Config::from_str(config_str).unwrap();
+        let api = config.get_service("api").unwrap();
+
+        let addr = api.listen_addr("api", "test");
+        assert!(addr.is_socket());
+        assert!(!addr.is_tcp());
+        assert_eq!(addr.port(), None);
+    }
+
+    #[test]
+    fn test_interpolate_with_port() {
+        let config_str = r#"
+[service.api]
+command = "./api --port {port}"
+port = 3000
+"#;
+        let config = Config::from_str(config_str).unwrap();
+        let api = config.get_service("api").unwrap();
+        let data_dir = PathBuf::from("/data");
+
+        let cmd = api.command_interpolated("api", "test", &data_dir);
+        assert_eq!(cmd, "./api --port 3000");
+    }
+
+    #[test]
+    fn test_port_with_other_options() {
+        let config_str = r#"
+[service.api]
+command = "./api"
+port = 4000
+health = "/health"
+restart = "always"
+idle_timeout = 300
+memory_limit_mb = 256
+"#;
+        let config = Config::from_str(config_str).unwrap();
+        let api = config.get_service("api").unwrap();
+
+        assert_eq!(api.port, Some(4000));
+        assert_eq!(api.health, Some("/health".to_string()));
+        assert_eq!(api.restart, "always");
+        assert_eq!(api.idle_timeout, Some(300));
+        assert_eq!(api.memory_limit_mb, Some(256));
     }
 }

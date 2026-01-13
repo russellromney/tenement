@@ -60,6 +60,31 @@ enum Commands {
         /// Traffic weight (0-100, default 100)
         weight: u8,
     },
+    /// Deploy a new version and wait for it to be healthy
+    Deploy {
+        /// Process name (from tenement.toml)
+        process: String,
+        /// Version to deploy (becomes instance ID, e.g., "v2")
+        #[arg(long, short)]
+        version: String,
+        /// Initial traffic weight (0-100, default 100)
+        #[arg(long, short, default_value = "100")]
+        weight: u8,
+        /// Health check timeout in seconds (default 30)
+        #[arg(long, default_value = "30")]
+        timeout: u64,
+    },
+    /// Atomically swap traffic from one version to another (blue/green)
+    Route {
+        /// Process name (from tenement.toml)
+        process: String,
+        /// Source version (will be set to weight 0)
+        #[arg(long)]
+        from: String,
+        /// Target version (will be set to weight 100)
+        #[arg(long)]
+        to: String,
+    },
     /// Show config
     Config,
     /// Generate a new API token
@@ -173,6 +198,27 @@ async fn main() -> Result<()> {
             }
             hypervisor.set_weight(&process, &id, weight).await?;
             println!("Set {} weight to {}", instance, weight);
+        }
+        Commands::Deploy { process, version, weight, timeout } => {
+            let hypervisor = Hypervisor::from_config_file()?;
+            println!("Deploying {}:{} with weight {}", process, version, weight);
+            println!("Waiting for health check (timeout: {}s)...", timeout);
+
+            let socket = hypervisor.deploy_and_wait_healthy(&process, &version, weight, timeout).await?;
+
+            println!("Deployed {}:{}", process, version);
+            println!("Socket: {}", socket.display());
+            println!("Weight: {}", weight);
+            println!("Status: healthy");
+        }
+        Commands::Route { process, from, to } => {
+            let hypervisor = Hypervisor::from_config_file()?;
+
+            hypervisor.route_swap(&process, &from, &to).await?;
+
+            println!("Routed traffic: {}:{} -> {}:{}", process, from, process, to);
+            println!("  {}:{} weight = 0", process, from);
+            println!("  {}:{} weight = 100", process, to);
         }
         Commands::Config => {
             let config = Config::load()?;

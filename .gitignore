@@ -43,3 +43,7 @@ dashboard/dist/
 *.sock
 *.ext4
 vmlinux
+
+# Examples - compiled binaries
+examples/*/apps/go/go-worker
+examples/*/data/

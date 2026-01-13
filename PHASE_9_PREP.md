@@ -151,10 +151,12 @@ These are either platform concerns or SaaS concerns.
   - `{process}.{domain}` → weighted route
 - [x] 11 tests for traffic distribution
 
-**Session 2: Deploy Commands**
-- `ten deploy` - spawn + wait healthy
-- `ten route` - atomic swap
-- `ten weight` - adjust traffic split
+**Session 2: Deploy Commands - DONE**
+- [x] `ten deploy api --version v2` - spawn + wait healthy
+- [x] `ten route api --from v1 --to v2` - atomic swap
+- [x] `deploy_and_wait_healthy()` method with configurable timeout
+- [x] `route_swap()` method for atomic weight updates
+- [x] 11 new tests (deploy, route, blue/green workflow, canary workflow)
 
 **Session 3: Slum Health Loop**
 - Background polling task
