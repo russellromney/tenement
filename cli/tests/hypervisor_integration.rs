@@ -321,6 +321,10 @@ async fn test_metrics_update_on_stop() {
     let script = create_touch_socket_script(&script_dir);
     let (server, _token, hypervisor, _db_dir) = setup_with_process("api", &script).await;
 
+    // Clean up any stale sockets from previous tests
+    let _ = std::fs::remove_file("/tmp/api-test1.sock");
+    let _ = std::fs::remove_file("/tmp/api-test2.sock");
+
     // Spawn two instances
     let socket1 = hypervisor.spawn("api", "test1").await.unwrap();
     let socket2 = hypervisor.spawn("api", "test2").await.unwrap();
@@ -407,6 +411,10 @@ async fn test_health_status_in_api() {
     let script_dir = TempDir::new().unwrap();
     let script = create_touch_socket_script(&script_dir);
     let (server, token, hypervisor, _db_dir) = setup_with_process("api", &script).await;
+
+    // Clean up any stale socket from previous tests
+    let socket_path = std::path::PathBuf::from("/tmp/api-test.sock");
+    let _ = std::fs::remove_file(&socket_path);
 
     // Spawn instance
     let socket = hypervisor.spawn("api", "test").await.unwrap();

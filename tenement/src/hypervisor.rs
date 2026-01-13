@@ -1448,6 +1448,10 @@ sleep 30
         let config = test_config_with_process("api", "sleep", vec!["1"]);
         let hypervisor = Hypervisor::new(config);
 
+        // Clean up any stale socket from previous tests
+        let socket_path = std::path::PathBuf::from("/tmp/api-test.sock");
+        let _ = std::fs::remove_file(&socket_path);
+
         // Don't spawn, just check health
         // For a configured process that isn't running, returns Unhealthy
         let status = hypervisor.check_health("api", "test").await;

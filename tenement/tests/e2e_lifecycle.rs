@@ -178,6 +178,10 @@ async fn test_restart_on_unhealthy() {
     config.settings.backoff_base_ms = 0; // No backoff for faster test
     let hypervisor = Hypervisor::new(config);
 
+    // Clean up any stale socket from previous tests
+    let socket_path = std::path::PathBuf::from("/tmp/api-test.sock");
+    let _ = std::fs::remove_file(&socket_path);
+
     // Spawn instance
     let socket = hypervisor.spawn("api", "test").await.unwrap();
     assert!(wait_for_socket(&socket, 2000).await);
