@@ -1,6 +1,6 @@
 # tenement
 
-**Process hypervisor for single-server deployments.**
+**Lightweight process hypervisor for single-server deployments of many single-tenant processes.**
 
 Pack 100+ services on a $5 VPS. Each customer gets their own process - spawn on demand, stop when idle, wake on first request.
 
