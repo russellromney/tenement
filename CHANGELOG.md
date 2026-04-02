@@ -2,6 +2,13 @@
 
 ## v0.2.0
 
+### Phase Rollin (Process Reliability)
+- Process exit monitoring: detects crashes within 1s via kill(pid, 0) background task
+- Restart history persistence: restart count and timestamps survive stop/spawn cycles
+- Graceful shutdown: SIGTERM/SIGINT stops all instances before server exit
+- TCP readiness in spawn_and_wait: tries TCP connect for port-based runtimes
+- Wake-once pattern: concurrent wake requests share a single spawn via tokio::sync::Notify
+
 ### Phase Counterfeit (Fix Fake Features)
 - Request metrics now recorded in proxy: requests_total and request_duration_ms per process/instance
 - Storage quota enforcement: health monitor checks usage, updates metrics, warns at 80%, errors at 100%

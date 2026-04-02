@@ -11,31 +11,6 @@ See [CHANGELOG.md](CHANGELOG.md) for completed work.
 - Needs design decision: switch to Unix socket communication, or implement full container networking
 - Revisit when the single-server story is more mature
 
-## Phase Rollin -- Process Reliability
-> After: Phase Counterfeit · Before: Phase Re-Arranged
-
-### a. Process exit monitoring
-- Spawn a `child.wait()` task per instance that detects exit immediately
-- Trigger restart/cleanup on exit instead of waiting for next health check cycle (up to 10s delay)
-
-### b. Restart history persistence
-- `restart()` calls `stop()` which removes instance from map, then `spawn()` creates fresh with empty `restart_times`
-- `max_restarts` within `restart_window` can never trigger `Failed` because history resets each restart
-- Preserve restart history across stop/spawn cycles
-
-### c. Graceful shutdown + signal handling
-- `ten serve` doesn't handle SIGTERM/SIGINT
-- If tenement dies, all child processes become orphans on their allocated ports
-- On shutdown: stop accepting new connections, drain in-flight requests, kill all children, release ports
-
-### d. `spawn_and_wait` TCP readiness
-- For TCP-based runtimes, `spawn_and_wait` checks `socket.exists()` but should check via TCP connect
-- `spawn()` handles both modes correctly; `spawn_and_wait` does not
-
-### e. Request queuing during wake
-- Multiple requests hitting a sleeping instance each call `spawn_and_wait` independently
-- Use a `tokio::sync::Notify` or similar per-instance wake-once pattern
-
 ## Phase Re-Arranged -- State & Persistence
 > After: Phase Rollin · Before: Phase Nookie
 
