@@ -483,8 +483,9 @@ async fn list_instances(State(state): State<AppState>) -> impl IntoResponse {
         .into_iter()
         .map(|i| InstanceInfo {
             id: i.id.to_string(),
-            socket: i.socket.display().to_string(),
+            socket: i.listen_addr(),
             uptime_secs: i.uptime_secs,
+            idle_secs: i.idle_secs,
             restarts: i.restarts,
             health: i.health.to_string(),
             storage_used_bytes: i.storage_used_bytes,
@@ -500,6 +501,7 @@ struct InstanceInfo {
     id: String,
     socket: String,
     uptime_secs: u64,
+    idle_secs: u64,
     restarts: u32,
     health: String,
     storage_used_bytes: u64,

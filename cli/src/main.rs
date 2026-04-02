@@ -473,6 +473,16 @@ fn cmd_init(name: Option<String>, command: Option<String>) -> Result<()> {
 
     let service_name = name.unwrap_or(dir_name);
 
+    // Validate service name (must be a valid TOML key and safe for paths)
+    if service_name.is_empty()
+        || service_name.contains(|c: char| c.is_whitespace() || ".[]{}\"\\'`".contains(c))
+    {
+        anyhow::bail!(
+            "Invalid service name '{}'. Use --name to set a valid name (alphanumeric, hyphens, underscores).",
+            service_name
+        );
+    }
+
     let detected_command = command.unwrap_or_else(|| detect_framework_command());
 
     let config = format!(

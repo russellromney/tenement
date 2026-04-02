@@ -135,23 +135,19 @@ impl Hypervisor {
                 .with_context(|| format!("Failed to create socket dir: {:?}", socket_parent))?;
         }
 
-        // Check if already running or currently being spawned (prevents race condition)
+        // Atomically check if running/spawning and mark as spawning (prevents race condition).
+        // Both checks and the insert happen under one write lock.
         {
             let instances = self.instances.read().await;
             if instances.contains_key(&instance_id) {
                 info!("Instance {} already running", instance_id);
                 return Ok(socket);
             }
-            let spawning = self.spawning.read().await;
-            if spawning.contains(&instance_id) {
+            let mut spawning = self.spawning.write().await;
+            if !spawning.insert(instance_id.clone()) {
                 info!("Instance {} is already being spawned", instance_id);
                 return Ok(socket);
             }
-        }
-        // Mark as spawning (prevents concurrent spawn of same instance)
-        {
-            let mut spawning = self.spawning.write().await;
-            spawning.insert(instance_id.clone());
         }
 
         let data_dir = &self.config.settings.data_dir;
