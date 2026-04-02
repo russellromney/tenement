@@ -6,34 +6,14 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-/// Raw config structure for TOML parsing (internal use)
-#[derive(Debug, Clone, Deserialize)]
-struct RawConfig {
-    #[serde(default)]
-    settings: Settings,
-    #[serde(default)]
-    service: HashMap<String, ProcessConfig>,
-    #[serde(default)]
-    process: HashMap<String, ProcessConfig>,
-    #[serde(default)]
-    routing: RoutingConfig,
-    /// Instances to auto-spawn on boot
-    #[serde(default)]
-    instances: HashMap<String, Vec<String>>,
-}
-
 /// Main configuration structure
-///
-/// Supports both `[process.X]` (legacy) and `[service.X]` (preferred) section names.
-/// Both are merged together during loading - `[process.X]` is an alias for `[service.X]`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     /// Global settings
     #[serde(default)]
     pub settings: Settings,
 
-    /// Service definitions (templates)
-    /// Both `[service.X]` and `[process.X]` sections are merged here
+    /// Service definitions
     #[serde(default)]
     pub service: HashMap<String, ProcessConfig>,
 
@@ -180,8 +160,7 @@ fn default_backoff_max_ms() -> u64 {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProcessConfig {
     /// Isolation level: "namespace" (default), "process", "firecracker", or "qemu"
-    /// Also accepts "runtime" as an alias for backwards compatibility
-    #[serde(default, alias = "runtime")]
+    #[serde(default)]
     pub isolation: RuntimeType,
 
     /// Command to run (supports {name}, {id}, {data_dir} interpolation)
@@ -335,7 +314,7 @@ impl Config {
 
     /// Load config from a specific path
     ///
-    /// Supports both `[service.X]` (preferred) and `[process.X]` (legacy) sections.
+    /// Load config from a specific path.
     /// Both are merged into the `service` field.
     pub fn load_from_path(path: &Path) -> Result<Self> {
         let content = std::fs::read_to_string(path)
@@ -346,26 +325,12 @@ impl Config {
     }
 
     /// Parse config from a TOML string
-    ///
-    /// Supports both `[service.X]` (preferred) and `[process.X]` (legacy) sections.
     pub fn from_str(content: &str) -> Result<Self> {
-        let raw: RawConfig = toml::from_str(content)?;
-
-        // Merge process (legacy) and service (preferred) sections
-        let mut service = raw.service;
-        for (name, config) in raw.process {
-            if service.contains_key(&name) {
-                anyhow::bail!(
-                    "Service '{}' defined in both [service.{}] and [process.{}]. Use only one.",
-                    name, name, name
-                );
-            }
-            service.insert(name, config);
-        }
+        let config: Config = toml::from_str(content)?;
 
         // Validate instances reference defined services
-        for (service_name, _instance_ids) in &raw.instances {
-            if !service.contains_key(service_name) {
+        for (service_name, _instance_ids) in &config.instances {
+            if !config.service.contains_key(service_name) {
                 anyhow::bail!(
                     "Instance references undefined service '{}'. \
                     Define it in [service.{}] first.",
@@ -374,12 +339,7 @@ impl Config {
             }
         }
 
-        Ok(Config {
-            settings: raw.settings,
-            service,
-            routing: raw.routing,
-            instances: raw.instances,
-        })
+        Ok(config)
     }
 
     /// Find tenement.toml by walking up from current directory
@@ -395,7 +355,7 @@ impl Config {
             if !current.pop() {
                 anyhow::bail!(
                     "No tenement.toml found. Create one with:\n\n\
-                    [process.myapp]\n\
+                    [service.myapp]\n\
                     command = \"./my-app\"\n\
                     socket = \"/tmp/myapp-{{id}}.sock\"\n"
                 );
@@ -406,12 +366,6 @@ impl Config {
     /// Get a service config by name
     pub fn get_service(&self, name: &str) -> Option<&ProcessConfig> {
         self.service.get(name)
-    }
-
-    /// Get a process config by name (legacy alias for get_service)
-    #[deprecated(since = "0.4.0", note = "Use get_service() instead")]
-    pub fn get_process(&self, name: &str) -> Option<&ProcessConfig> {
-        self.get_service(name)
     }
 
     /// Get all configured instances to spawn on boot
@@ -486,12 +440,6 @@ impl ProcessConfig {
         self.isolation
     }
 
-    /// Get the runtime type (legacy alias for isolation)
-    #[deprecated(since = "0.4.0", note = "Use isolation() instead")]
-    pub fn runtime(&self) -> RuntimeType {
-        self.isolation
-    }
-
     /// Get the listen address for an instance
     /// Returns a socket path. TCP ports are allocated separately by the hypervisor.
     pub fn listen_addr(&self, name: &str, id: &str, port: Option<u16>) -> ListenAddr {
@@ -550,23 +498,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_parse_minimal_config_legacy_process() {
-        // Test legacy [process.X] format still works
-        let config_str = r#"
-[process.api]
-command = "./api-server"
-"#;
-        let config = Config::from_str(config_str).unwrap();
-
-        assert!(config.service.contains_key("api"));
-        let api = config.get_service("api").unwrap();
-        assert_eq!(api.command, "./api-server");
-        assert_eq!(api.socket, "/tmp/tenement/{name}-{id}.sock");
-    }
-
-    #[test]
-    fn test_parse_minimal_config_new_service() {
-        // Test new [service.X] format
+    fn test_parse_minimal_config() {
         let config_str = r#"
 [service.api]
 command = "./api-server"
@@ -883,22 +815,6 @@ vsock_port = 6000
     }
 
     #[test]
-    fn test_firecracker_config_legacy_runtime() {
-        // Test legacy 'runtime' field still works
-        let config_str = r#"
-[process.secure]
-runtime = "firecracker"
-command = "./worker"
-kernel = "/var/lib/tenement/vmlinux"
-rootfs = "/var/lib/tenement/worker.ext4"
-"#;
-        let config = Config::from_str(config_str).unwrap();
-        let secure = config.get_service("secure").unwrap();
-
-        assert_eq!(secure.isolation, RuntimeType::Firecracker);
-    }
-
-    #[test]
     fn test_firecracker_defaults() {
         let config_str = r#"
 [service.secure]
@@ -966,20 +882,6 @@ command = "./api"
         let config_str = r#"
 [service.api]
 isolation = "process"
-command = "./api"
-"#;
-        let config = Config::from_str(config_str).unwrap();
-        let api = config.get_service("api").unwrap();
-
-        assert_eq!(api.isolation, RuntimeType::Process);
-    }
-
-    #[test]
-    fn test_legacy_runtime_field_works() {
-        // Test that the legacy 'runtime' field still works
-        let config_str = r#"
-[process.api]
-runtime = "process"
 command = "./api"
 "#;
         let config = Config::from_str(config_str).unwrap();
@@ -1083,13 +985,13 @@ command = "./api"
     }
 
     #[test]
-    fn test_mixed_service_and_process_sections() {
-        // Test that both [service.X] and [process.X] can be used together
+    fn test_multiple_services_together() {
+        // Test that multiple [service.X] sections work together
         let config_str = r#"
 [service.api]
 command = "./api"
 
-[process.worker]
+[service.worker]
 command = "./worker"
 "#;
         let config = Config::from_str(config_str).unwrap();
@@ -1100,18 +1002,17 @@ command = "./worker"
     }
 
     #[test]
-    fn test_duplicate_service_process_fails() {
-        // Test that defining the same name in both [service] and [process] fails
+    fn test_duplicate_service_fails() {
+        // TOML parser rejects duplicate section names
         let config_str = r#"
 [service.api]
 command = "./api"
 
-[process.api]
+[service.api]
 command = "./api-other"
 "#;
         let result = Config::from_str(config_str);
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("defined in both"));
     }
 
     #[test]

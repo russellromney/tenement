@@ -748,6 +748,7 @@ impl Hypervisor {
                 tokio::time::sleep(interval).await;
                 hyp.run_health_checks().await;
                 hyp.reap_idle_instances().await;
+                hyp.check_storage_quotas().await;
             }
         });
     }
@@ -855,6 +856,69 @@ impl Hypervisor {
 
             if let Err(e) = self.stop(&instance_id.process, &instance_id.id).await {
                 error!("Failed to stop idle instance {}: {}", instance_id, e);
+            }
+        }
+    }
+
+    /// Check storage quotas for all instances and update metrics.
+    /// Logs warnings at 80% and errors at 100% usage.
+    async fn check_storage_quotas(&self) {
+        let instance_data: Vec<(InstanceId, std::path::PathBuf, Option<u32>)> = {
+            let instances = self.instances.read().await;
+            instances
+                .values()
+                .map(|i| (i.id.clone(), i.data_dir.clone(), i.storage_quota_mb))
+                .collect()
+        };
+
+        for (instance_id, data_dir, quota_mb) in instance_data {
+            let used_bytes = calculate_dir_size(data_dir).await.unwrap_or(0);
+
+            // Update cached storage usage on the instance
+            {
+                let mut instances = self.instances.write().await;
+                if let Some(instance) = instances.get_mut(&instance_id) {
+                    instance.storage_used_bytes = used_bytes;
+                }
+            }
+
+            // Update metrics
+            let mut labels = HashMap::new();
+            labels.insert("process".to_string(), instance_id.process.clone());
+            labels.insert("id".to_string(), instance_id.id.clone());
+            let gauge = self.metrics.instance_storage_bytes.with_labels(&labels).await;
+            gauge.set(used_bytes);
+
+            // Check quota
+            if let Some(quota_mb) = quota_mb {
+                let quota_bytes = (quota_mb as u64) * 1024 * 1024;
+
+                let quota_gauge = self.metrics.instance_storage_quota_bytes.with_labels(&labels).await;
+                quota_gauge.set(quota_bytes);
+
+                if quota_bytes > 0 {
+                    let ratio = used_bytes as f64 / quota_bytes as f64;
+                    let ratio_gauge = self.metrics.instance_storage_usage_ratio.with_labels(&labels).await;
+                    ratio_gauge.set((ratio * 10000.0) as u64);
+
+                    if ratio >= 1.0 {
+                        error!(
+                            "Instance {} storage quota exceeded: {:.1}MB / {:.1}MB ({:.0}%)",
+                            instance_id,
+                            used_bytes as f64 / 1024.0 / 1024.0,
+                            quota_mb as f64,
+                            ratio * 100.0
+                        );
+                    } else if ratio >= 0.8 {
+                        warn!(
+                            "Instance {} storage usage high: {:.1}MB / {:.1}MB ({:.0}%)",
+                            instance_id,
+                            used_bytes as f64 / 1024.0 / 1024.0,
+                            quota_mb as f64,
+                            ratio * 100.0
+                        );
+                    }
+                }
             }
         }
     }

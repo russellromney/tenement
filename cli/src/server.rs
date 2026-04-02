@@ -739,6 +739,8 @@ async fn proxy_to_instance(
     id: Option<&str>,
     req: Request<Body>,
 ) -> Response {
+    let start = std::time::Instant::now();
+
     // Check if process is configured first
     if !state.hypervisor.has_process(process) {
         tracing::debug!("Subdomain request for unconfigured process: {}", process);
@@ -803,11 +805,25 @@ async fn proxy_to_instance(
     };
 
     // Proxy based on connection type
-    if let Some(addr) = target.tcp_addr() {
+    let response = if let Some(addr) = target.tcp_addr() {
         proxy_to_tcp(&state.client, &addr, req).await
     } else {
         proxy_to_unix_socket(&target.socket, req).await
-    }
+    };
+
+    // Record request metrics
+    let duration_ms = start.elapsed().as_secs_f64() * 1000.0;
+    let instance_id = id.unwrap_or("weighted");
+    let metrics = state.hypervisor.metrics();
+    let mut labels = std::collections::HashMap::new();
+    labels.insert("process".to_string(), process.to_string());
+    labels.insert("instance".to_string(), instance_id.to_string());
+    let counter = metrics.requests_total.with_labels(&labels).await;
+    counter.inc();
+    let histogram = metrics.request_duration_ms.with_labels(&labels).await;
+    histogram.observe(duration_ms);
+
+    response
 }
 
 /// Proxy an HTTP request to a Unix socket

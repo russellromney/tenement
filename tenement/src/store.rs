@@ -226,7 +226,12 @@ impl LogStore {
             WHERE logs_fts MATCH ?
             "#,
         );
-        let mut params: Vec<String> = vec![format!("\"{}\"", search.replace('"', "\"\""))];
+        // Sanitize FTS5 search input: strip metacharacters, wrap in double quotes for phrase search
+        let sanitized: String = search
+            .chars()
+            .filter(|c| !matches!(c, '"' | '*' | '+' | '-' | '(' | ')' | '^' | '{' | '}' | ':'))
+            .collect();
+        let mut params: Vec<String> = vec![format!("\"{}\"", sanitized)];
 
         if let Some(ref process) = query.process {
             sql.push_str(" AND l.process = ?");
