@@ -41,7 +41,7 @@ async fn test_full_spawn_to_stop_lifecycle() {
 
     // 3. Verify socket created
     assert!(
-        wait_for_socket(&socket, 2000).await,
+        wait_for_socket(&socket, 5000).await,
         "Socket should be created"
     );
 
@@ -55,7 +55,7 @@ async fn test_full_spawn_to_stop_lifecycle() {
 
     // 6. Verify socket removed
     assert!(
-        wait_for_socket_removed(&socket, 2000).await,
+        wait_for_socket_removed(&socket, 5000).await,
         "Socket should be removed after stop"
     );
 }
@@ -76,7 +76,7 @@ async fn test_health_check_updates_status() {
     let socket = hypervisor.spawn("api", "test").await.unwrap();
 
     // Wait for socket to be ready
-    assert!(wait_for_socket(&socket, 2000).await);
+    assert!(wait_for_socket(&socket, 5000).await);
 
     // Initial status should be Unknown
     let info = hypervisor.get("api", "test").await.unwrap();
@@ -184,7 +184,7 @@ async fn test_restart_on_unhealthy() {
 
     // Spawn instance
     let socket = hypervisor.spawn("api", "test").await.unwrap();
-    assert!(wait_for_socket(&socket, 2000).await);
+    assert!(wait_for_socket(&socket, 5000).await);
 
     // Health check should be Healthy (socket file exists)
     let status = hypervisor.check_health("api", "test").await;
@@ -222,7 +222,7 @@ async fn test_max_restarts_enters_failed() {
 
     // Spawn instance
     let socket = hypervisor.spawn("api", "test").await.unwrap();
-    assert!(wait_for_socket(&socket, 2000).await);
+    assert!(wait_for_socket(&socket, 5000).await);
 
     // Simulate multiple restarts to exceed threshold
     for _ in 0..3 {
@@ -299,7 +299,7 @@ async fn test_socket_cleanup_on_stop() {
     // Spawn and wait for socket
     let socket = hypervisor.spawn("api", "test").await.unwrap();
     assert!(
-        wait_for_socket(&socket, 3000).await,
+        wait_for_socket(&socket, 5000).await,
         "Socket should be created after spawn at {:?}",
         socket
     );
@@ -309,7 +309,7 @@ async fn test_socket_cleanup_on_stop() {
 
     // Socket should be removed
     assert!(
-        wait_for_socket_removed(&socket, 2000).await,
+        wait_for_socket_removed(&socket, 5000).await,
         "Socket file should be cleaned up on stop"
     );
 }

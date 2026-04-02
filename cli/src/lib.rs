@@ -1,6 +1,8 @@
 //! tenement CLI library
 //!
-//! Exposes server and dashboard modules for integration testing.
+//! Exposes server, dashboard, API routes, and client modules.
 
+pub mod api_routes;
+pub mod client;
 pub mod dashboard;
 pub mod server;

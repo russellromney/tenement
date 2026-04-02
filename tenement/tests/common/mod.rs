@@ -11,15 +11,15 @@ pub use tenement::config::ProcessConfig;
 
 /// Create a test config with a simple process
 pub fn test_config_with_process(name: &str, command: &str, args: Vec<&str>) -> Config {
+    let test_id = format!("{}-{}", std::process::id(), rand::random::<u32>());
     let mut config = Config::default();
-    config.settings.data_dir = std::env::temp_dir().join("tenement-test");
+    config.settings.data_dir = std::env::temp_dir().join(format!("tenement-test-{}", test_id));
     config.settings.backoff_base_ms = 0; // No backoff delay in tests
 
     let process = ProcessConfig {
         command: command.to_string(),
         args: args.into_iter().map(|s| s.to_string()).collect(),
-        // Use /tmp directly since it always exists
-        socket: "/tmp/{name}-{id}.sock".to_string(),
+        socket: format!("/tmp/tenement-test-{}/{{name}}-{{id}}.sock", test_id),
         isolation: RuntimeType::Process,
         health: None,
         env: HashMap::new(),

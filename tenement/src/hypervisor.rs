@@ -124,6 +124,12 @@ impl Hypervisor {
         std::fs::create_dir_all(&instance_data_dir)
             .with_context(|| format!("Failed to create data dir: {:?}", instance_data_dir))?;
 
+        // Create socket parent directory if needed
+        if let Some(socket_parent) = socket.parent() {
+            std::fs::create_dir_all(socket_parent)
+                .with_context(|| format!("Failed to create socket dir: {:?}", socket_parent))?;
+        }
+
         // Check if already running
         {
             let instances = self.instances.read().await;
@@ -1010,13 +1016,14 @@ mod tests {
 
     // Helper to create a test config with a simple echo server process
     fn test_config_with_process(name: &str, command: &str, args: Vec<&str>) -> Config {
+        let test_id = format!("{}-{}", std::process::id(), rand::random::<u32>());
         let mut config = Config::default();
-        config.settings.data_dir = std::env::temp_dir().join("tenement-test");
+        config.settings.data_dir = std::env::temp_dir().join(format!("tenement-test-{}", test_id));
 
         let process = ProcessConfig {
             command: command.to_string(),
             args: args.into_iter().map(|s| s.to_string()).collect(),
-            socket: "/tmp/{name}-{id}.sock".to_string(),
+            socket: format!("/tmp/tenement-test-{}/{{name}}-{{id}}.sock", test_id),
             isolation: RuntimeType::Process,
             health: None,
             env: HashMap::new(),

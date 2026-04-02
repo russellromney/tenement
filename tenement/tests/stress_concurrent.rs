@@ -92,11 +92,10 @@ async fn test_stress_concurrent_spawn_stop() {
         match hypervisor.spawn("api", &id).await {
             Ok(socket) => {
                 // Wait briefly for socket
-                if wait_for_socket(&socket, 500).await {
-                    // Stop
-                    if hypervisor.stop("api", &id).await.is_ok() {
-                        success_count += 1;
-                    }
+                let ready = wait_for_socket(&socket, 500).await;
+                // Always stop, even if socket wasn't ready
+                if hypervisor.stop("api", &id).await.is_ok() && ready {
+                    success_count += 1;
                 }
             }
             Err(_) => continue,

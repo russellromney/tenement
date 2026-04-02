@@ -1,198 +1,170 @@
 # Roadmap
 
-See [CHANGELOG.md](CHANGELOG.md) for what's been implemented.
+See [CHANGELOG.md](CHANGELOG.md) for completed work.
 
-## In Progress
+## Phase Break Stuff -- Security Hardening
+> After: (none) · Before: Phase Counterfeit
 
-- Slum health check loop
+Critical security fixes.
 
-## Planned
+### a. Network namespace isolation
+- Add `CLONE_NEWNET` to namespace runtime so tenant processes can't reach each other over localhost
+- Without this, any tenant can connect to `127.0.0.1:{port}` of any other tenant
+- Create a veth pair per instance to provide outbound connectivity while isolating inbound
 
-### Deployment & Rollout System
+### b. Auth DoS prevention
+- Argon2 runs on every request; attacker can exhaust CPU with invalid tokens
+- Cache the verified token hash in memory after first successful verification
+- Compare in constant-time per request instead of re-running Argon2
 
-#### The Two Deployment Dimensions
+### c. Spawn race condition
+- Two concurrent spawns for the same instance can both pass the "already running" read check
+- Use a write lock for the entire check-and-insert, or a per-instance spawn mutex
 
-There are two orthogonal concerns:
+### d. Error message sanitization
+- Subdomain proxy error responses leak internal paths and error details to unauthenticated users
+- Return generic errors externally, log details internally
 
-1. **Which tenants** get the deploy (tenant-level rollout)
-   - "Roll out to canary tenants first, then exponential to the rest"
-   - Targeting: `api:prod:canary*` then `api:prod:*`
+## Phase Counterfeit -- Fix Fake Features
+> After: Phase Break Stuff · Before: Phase Rollin
 
-2. **Canary within a tenant** (version-level weighted routing)
-   - "Give 10% of tenant1's traffic to v2"
-   - Weighted: `api:prod:tenant1:v1` (90%) + `api:prod:tenant1:v2` (10%)
+Features that exist in code but don't actually work end-to-end.
 
-Both should be supported. A canary tenant can also have per-tenant canary versioning.
+### a. Record request metrics
+- `requests_total` and `request_duration_ms` are defined in Metrics but never incremented
+- The proxy path doesn't count requests or measure latency
+- Add ~20 lines of middleware to record per-tenant request count and duration
+- The Prometheus endpoint currently shows zeros for these; make it real
 
-#### Instance ID Structure
+### b. Storage quota enforcement
+- `storage_quota_mb` is a config option that does nothing
+- No periodic check, no warnings emitted, no metrics updated
+- The health monitor should check storage usage, emit warnings at 80%/90%, update `instance_storage_bytes` gauge
+- Decide: hard kill at 100%? or just loud warnings + metrics?
 
-Four-part colon-separated ID: `{process}:{env}:{tenant}:{version}`
+### c. Defer slum
+- `slum` is 90% CRUD with no health checking, no real proxying, no failover
+- It's a distraction from making the core product solid
+- Move to a separate repo or gate behind a feature flag
+- Revisit after the single-server story is airtight
 
-```
-api:prod:tenant1:v1      # production tenant1 running v1
-api:prod:tenant1:v2      # same tenant, canary version
-api:prod:canary1:v2      # canary tenant on new version
-api:dev:test1:abc123f    # dev tenant on specific git commit
-api:staging:demo:blue    # staging with blue-green naming
-```
+### d. FTS5 search injection
+- FTS5 MATCH queries accept special syntax (NOT, OR, NEAR, column filters)
+- User search input is wrapped in double quotes but not properly escaped for FTS5
+- Sanitize or use parameterized FTS5 queries
 
-**Version is freeform** - tenement doesn't interpret it:
-- Semver: `v2.1.0`
-- Names: `blue`, `green`, `canary`
-- Git hash: `abc123f`
-- Date: `2024-01-13`
-- PR: `pr-456`
+## Phase Rollin -- Process Reliability
+> After: Phase Counterfeit · Before: Phase Re-Arranged
 
-#### CLI Syntax
+### a. Process exit monitoring
+- Spawn a `child.wait()` task per instance that detects exit immediately
+- Trigger restart/cleanup on exit instead of waiting for next health check cycle (up to 10s delay)
 
-Both colon notation and flags, equivalent:
+### b. Restart history persistence
+- `restart()` calls `stop()` which removes instance from map, then `spawn()` creates fresh with empty `restart_times`
+- `max_restarts` within `restart_window` can never trigger `Failed` because history resets each restart
+- Preserve restart history across stop/spawn cycles
 
-```bash
-# Colon notation (concise)
-ten deploy api:prod:tenant1:v2
-ten deploy api:prod:tenant1:v2 --weight 10
+### c. Graceful shutdown + signal handling
+- `ten serve` doesn't handle SIGTERM/SIGINT
+- If tenement dies, all child processes become orphans on their allocated ports
+- On shutdown: stop accepting new connections, drain in-flight requests, kill all children, release ports
 
-# Flag notation (explicit)
-ten deploy --process api --env prod --tenant tenant1 --version v2
-ten deploy -p api -e prod -t tenant1 -v v2 -w 10
+### d. `spawn_and_wait` TCP readiness
+- For TCP-based runtimes, `spawn_and_wait` checks `socket.exists()` but should check via TCP connect
+- `spawn()` handles both modes correctly; `spawn_and_wait` does not
 
-# Mixed - target + options
-ten deploy api:prod:tenant1 --version v2 --weight 10
+### e. Request queuing during wake
+- Multiple requests hitting a sleeping instance each call `spawn_and_wait` independently
+- Use a `tokio::sync::Notify` or similar per-instance wake-once pattern
 
-# Wildcards for batch operations
-ten deploy api:prod:*:v2           # all tenants, specific version
-ten deploy api:prod:canary*        # canary tenants
-ten ps api:prod:*                  # list all prod instances
-```
+## Phase Re-Arranged -- State & Persistence
+> After: Phase Rollin · Before: Phase Nookie
 
-Flags override colon notation if both provided.
+### a. Persistent instance state
+- All instance state is in-memory; a tenement crash loses knowledge of running processes
+- Orphaned processes keep running on their ports with no management
+- Write state to SQLite: `{instance_id, pid, port, started_at, process_config_hash}`
+- On startup: re-adopt orphaned processes or kill them
 
-#### Deployment Workflows
+### b. Default `storage_persist` to `true`
+- Current default of `false` silently destroys tenant data directories on idle timeout
+- For the stated use case (databases per tenant), this causes data loss every idle cycle
+- Change default, add migration note
 
-**Simple rollout** (no version split):
-```bash
-ten deploy api:prod:tenant1
-# Stops existing instance, starts new one with current code
-# Single instance per tenant, version implicit
-```
+### c. Cgroup failure handling
+- Cgroup creation failure currently `warn!`s and continues
+- Process runs unrestricted; one tenant can OOM the whole server
+- Fail loudly when resource limits are configured but can't be applied
 
-**Per-tenant canary** (weighted traffic within one tenant):
-```bash
-ten deploy api:prod:tenant1 --version v2 --weight 10
-# Now: api:prod:tenant1:v1 (existing, 100%) + api:prod:tenant1:v2 (new, 10%)
+## Phase Nookie -- Multi-Tenant Demo & Getting Started
+> After: Phase Re-Arranged · Before: Phase Full Nelson
 
-ten weight api:prod:tenant1:v2 50    # increase canary
-ten route api:prod:tenant1 --from v1 --to v2   # atomic cutover
-ten stop api:prod:tenant1:v1         # cleanup old version
-```
+Prove the value proposition with a real demo that shows why tenement exists.
 
-**Tenant-level canary** (some tenants get new version first):
-```bash
-# Phase 1: canary tenants
-ten deploy api:prod:canary1 --version v2
-ten deploy api:prod:canary2 --version v2
+### a. Killer multi-tenant example
+- 30-line Python app: reads `PORT`, serves a simple API backed by SQLite in `{data_dir}`
+- `tenement.toml` with `idle_timeout = 300`, `storage_persist = true`
+- Script that creates 10 tenants, shows them all running, idles them, wakes one
+- Show: 10 tenants on one box, 20MB total, sub-second wake from idle
 
-# Phase 2: first batch
-ten deploy api:prod:tenant[1-10] --version v2
+### b. Getting started guide
+- README quick start that goes from zero to multi-tenant in under 2 minutes
+- Cover the actual value prop, not just "here's how to spawn a process"
+- Show the subdomain routing, idle timeout, wake-on-request flow
 
-# Phase 3: all remaining
-ten deploy api:prod:* --version v2
-```
+### c. Deployment guide
+- Single Hetzner VPS setup with Caddy + tenement
+- DNS wildcard setup for `*.app.example.com`
+- systemd service with proper resource limits
 
-**Combined** (canary tenant with canary weight):
-```bash
-ten deploy api:prod:canary1 --version v2 --weight 10
-# Canary tenant gets 10% traffic to v2, 90% to v1
-# All other tenants still 100% on v1
-```
+## Phase Full Nelson -- Operational Hardening
+> After: Phase Nookie · Before: Phase Behind Blue Eyes
 
-**Blue-green**:
-```bash
-ten deploy api:prod:tenant1 --version green --weight 0
-# Test green directly: curl green.tenant1.api.example.com
-ten route api:prod:tenant1 --from blue --to green
-ten stop api:prod:tenant1:blue
-```
+### a. Request timeout on proxy
+- No timeout on reverse proxy; a hung tenant holds the connection forever
+- Add configurable per-service `request_timeout` (default 30s)
 
-#### Safety Rails
+### b. Unix socket client pooling
+- `proxy_to_unix_socket` creates a new `Client<UnixConnector>` per request
+- Share a pooled client like the TCP proxy does
 
-```bash
-# Broad patterns require confirmation
-ten deploy api:prod:*
-> This will deploy to 47 instances. Continue? [y/N]
+### c. Connection draining on stop
+- When an instance is stopped (manually or via idle timeout), active connections are severed immediately
+- Add a brief drain period: reject new requests, allow in-flight to complete (configurable, default 5s)
 
-# Skip confirmation
-ten deploy api:prod:* --yes
+### d. Connection-aware idle timeout
+- Currently tracks "last request" via `touch()`, but no tracking of active connections
+- An instance could be reaped while serving a long WebSocket or download
+- Track active connection count; don't reap while connections > 0
 
-# Preview without executing
-ten deploy api:prod:* --dry-run
-> Would deploy to:
->   api:prod:tenant1
->   api:prod:tenant2
->   ...
-```
+### e. File splits
+- `hypervisor.rs` and `server.rs` are both approaching 1000 lines
+- Split hypervisor into: lifecycle, health, routing, deploy
+- Split server into: routes, middleware, proxy
 
-#### Routing Logic
+## Phase Behind Blue Eyes -- Multi-Tenant Auth & Observability
+> After: Phase Full Nelson · Before: (none)
 
-Request for `tenant1.api.example.com`:
-1. Parse: process=`api`, tenant=`tenant1`
-2. Find all instances matching `api:*:tenant1:*`
-3. Filter by env if configured (e.g., prod only for this domain)
-4. Weighted random select among matching instances
-5. Route to selected instance's socket
+### a. Per-tenant API tokens
+- Currently one token for the entire system
+- No scoped access, no token rotation without downtime
+- Add per-tenant tokens with scoped access to their own logs/metrics/instances
 
-#### Open Design Questions
-
-**Where does code come from?**
-- Option A: Git-based - `ten deploy` does `git pull && build && restart`
-- Option B: Binary swap - build externally, `ten deploy --binary /path/to/new`
-- Option C: Implicit - whatever's at configured path, just restart
-- Leaning toward (C) with optional (A) for convenience
-
-**Deployment history/audit log:**
-- Track: who, what, when, success/fail
-- SQLite table? Append-only log file?
+### b. Deployment history/audit log
+- Track: who, what, when, success/fail in SQLite
 - Rollback needs to know "previous version"
 
-**Failed deploy handling:**
-- Current: health check timeout → stop unhealthy instance → error
-- Missing: auto-rollback of weight changes if canary fails
-- Options: keep manual, health-based auto-revert, circuit breaker
-
-**Slum coordination for multi-server:**
-- Option A: Slum as orchestrator - `slum deploy api:prod:*` fans out
-- Option B: Slum as registry - tenements pull desired state
-- Option C: Keep decoupled - operators SSH to each server
-- Single-server is priority; multi-server can stay manual initially
-
-**Scale-to-zero interaction:**
-- Deploying to sleeping instance: wake it? or update config for next wake?
-- Weight=0 should prevent wake-on-request (confirm this works)
-
-### Enhanced Monitoring
-- OpenTelemetry integration
+### c. OpenTelemetry integration
 - Distributed tracing
 - Alert webhooks
 
-### Advanced Networking
-- Custom network namespaces (full network isolation)
-- Service discovery (DNS-based)
-
-### Persistence
-- Checkpoint/restore (CRIU)
-- Instance snapshots for faster spawn
-
-## Maybe Later
-
-### WASM Runtime
-WebAssembly sandbox for WASI-compiled workloads. Deprioritized because most tenement users run Python/Node apps that can't compile to WASM. Namespace + sandbox covers most isolation needs.
-
-### Firecracker MicroVMs
-Full VM isolation with ~128MB overhead. Requires KVM (bare metal). For compliance requirements that mandate kernel isolation.
+### d. Service discovery
+- DNS-based service discovery between tenant processes
 
 ## Design Principles
 
-1. **Same API, different isolation** - All levels use the same routing, supervision, and health checks
-2. **Fail loudly** - Clear errors when isolation isn't available
-3. **No magic** - Explicit configuration, no auto-detection
-4. **Linux only** - Production tool for Linux servers
+1. **Same API, different isolation** -- All levels use the same routing, supervision, and health checks
+2. **Fail loudly** -- Clear errors when isolation isn't available
+3. **No magic** -- Explicit configuration, no auto-detection
+4. **Linux only** -- Production tool for Linux servers

@@ -97,10 +97,9 @@ impl PortAllocator {
     /// # tokio_test::block_on(async {
     /// let allocator = PortAllocator::new();
     /// let port = allocator.allocate().await.unwrap();
+    /// assert!(allocator.is_allocated(port).await);
     /// allocator.release(port).await;
-    /// // Port can now be allocated again
-    /// let port2 = allocator.allocate().await.unwrap();
-    /// assert_eq!(port, port2);
+    /// assert!(!allocator.is_allocated(port).await);
     /// # })
     /// ```
     pub async fn release(&self, port: u16) {

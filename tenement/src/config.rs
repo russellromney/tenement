@@ -636,11 +636,11 @@ SOCKET = "{socket}"
         let data_dir = PathBuf::from("/var/lib/tenement");
 
         let socket = api.socket_path("api", "user123");
-        assert_eq!(socket, PathBuf::from("/tmp/api-user123.sock"));
+        assert_eq!(socket, PathBuf::from("/tmp/tenement/api-user123.sock"));
 
         let env = api.env_interpolated("api", "user123", &data_dir, None);
         assert_eq!(env.get("DB"), Some(&"/var/lib/tenement/user123/app.db".to_string()));
-        assert_eq!(env.get("SOCKET"), Some(&"/tmp/api-user123.sock".to_string()));
+        assert_eq!(env.get("SOCKET"), Some(&"/tmp/tenement/api-user123.sock".to_string()));
     }
 
     #[test]
@@ -778,7 +778,7 @@ args = ["--socket", "{socket}", "--data", "{data_dir}/{id}"]
         let args = api.args_interpolated("api", "user123", &data_dir, None);
         assert_eq!(args.len(), 4);
         assert_eq!(args[0], "--socket");
-        assert_eq!(args[1], "/tmp/api-user123.sock");
+        assert_eq!(args[1], "/tmp/tenement/api-user123.sock");
         assert_eq!(args[2], "--data");
         assert_eq!(args[3], "/data/user123");
     }

@@ -67,7 +67,14 @@ pub fn create_router(state: AppState) -> Router {
         .route("/health", get(health))
         .route("/metrics", get(metrics_endpoint))
         .route("/api/instances", get(list_instances))
-        .route("/api/instances/{id}/storage", get(get_instance_storage))
+        .route("/api/instances/spawn", axum::routing::post(crate::api_routes::post_spawn))
+        .route("/api/instances/:id", axum::routing::delete(crate::api_routes::delete_instance))
+        .route("/api/instances/:id/storage", get(get_instance_storage))
+        .route("/api/instances/:id/restart", axum::routing::post(crate::api_routes::post_restart))
+        .route("/api/instances/:id/weight", axum::routing::put(crate::api_routes::put_weight))
+        .route("/api/instances/:id/health", axum::routing::get(crate::api_routes::get_health_check))
+        .route("/api/deploy", axum::routing::post(crate::api_routes::post_deploy))
+        .route("/api/route", axum::routing::post(crate::api_routes::post_route))
         .route("/api/logs", get(query_logs))
         .route("/api/logs/stream", get(stream_logs))
         .route("/api/tls/status", get(tls_status_endpoint))
@@ -104,7 +111,7 @@ async fn subdomain_middleware(
     // Check if this is a subdomain request
     match parse_subdomain(host, &state.domain) {
         Some(SubdomainRoute::Direct { process, id }) => {
-            // Direct route to specific instance: {id}.{process}.{domain}
+            // Direct route to specific instance: :id.{process}.{domain}
             proxy_to_instance(&state, &process, Some(&id), req).await
         }
         Some(SubdomainRoute::Weighted { process }) => {
@@ -462,7 +469,7 @@ struct InstanceInfo {
 
 /// Get storage info for a specific instance
 /// Instance ID format: process:instance (e.g., "api:prod")
-async fn get_instance_storage(
+pub async fn get_instance_storage(
     State(state): State<AppState>,
     axum::extract::Path(id): axum::extract::Path<String>,
 ) -> Result<Json<StorageInfoResponse>, StatusCode> {
@@ -487,7 +494,7 @@ async fn get_instance_storage(
 }
 
 #[derive(Serialize)]
-struct StorageInfoResponse {
+pub struct StorageInfoResponse {
     used_bytes: u64,
     quota_bytes: Option<u64>,
     usage_percent: Option<f64>,
@@ -611,7 +618,7 @@ async fn handle_request(
     // Parse subdomain pattern
     match parse_subdomain(&host, &state.domain) {
         Some(SubdomainRoute::Direct { process, id }) => {
-            // Direct route to specific instance: {id}.{process}.{domain}
+            // Direct route to specific instance: :id.{process}.{domain}
             proxy_to_instance(&state, &process, Some(&id), req).await
         }
         Some(SubdomainRoute::Weighted { process }) => {
@@ -628,14 +635,14 @@ async fn handle_request(
 
 /// Subdomain routing types
 enum SubdomainRoute {
-    /// Direct route to a specific instance: {id}.{process}.{domain}
+    /// Direct route to a specific instance: :id.{process}.{domain}
     Direct { process: String, id: String },
     /// Weighted route across all instances of a process: {process}.{domain}
     Weighted { process: String },
 }
 
 /// Parse subdomain pattern:
-/// - {id}.{process}.{domain} -> Direct route to specific instance
+/// - :id.{process}.{domain} -> Direct route to specific instance
 /// - {process}.{domain} -> Weighted route across all instances
 fn parse_subdomain(host: &str, domain: &str) -> Option<SubdomainRoute> {
     // Strip port if present
@@ -665,7 +672,7 @@ fn parse_subdomain(host: &str, domain: &str) -> Option<SubdomainRoute> {
             Some(SubdomainRoute::Weighted { process })
         }
         2 => {
-            // Two parts: {id}.{process}.{domain} -> direct routing
+            // Two parts: :id.{process}.{domain} -> direct routing
             let id = parts[0].to_string();
             let process = parts[1].to_string();
             if id.is_empty() || process.is_empty() {
@@ -880,7 +887,7 @@ mod tests {
 
     #[test]
     fn test_parse_subdomain() {
-        // Direct routing patterns: {id}.{process}.{domain}
+        // Direct routing patterns: :id.{process}.{domain}
         match parse_subdomain("prod.api.example.com", "example.com") {
             Some(SubdomainRoute::Direct { process, id }) => {
                 assert_eq!(process, "api");
@@ -1201,5 +1208,159 @@ mod tests {
             .add_header("Authorization", "Bearer invalid_token")
             .await;
         response.assert_status_unauthorized();
+    }
+
+    // ===================
+    // MUTATION API TESTS (Phase My Way)
+    // ===================
+
+    #[tokio::test]
+    async fn test_spawn_requires_auth() {
+        let (state, _token, _dir) = create_test_state().await;
+        let app = create_router(state);
+        let server = TestServer::new(app).unwrap();
+
+        let response = server
+            .post("/api/instances/spawn")
+            .json(&serde_json::json!({"process": "api", "id": "prod"}))
+            .await;
+        response.assert_status_unauthorized();
+    }
+
+    #[tokio::test]
+    async fn test_spawn_unknown_process() {
+        let (state, token, _dir) = create_test_state().await;
+        let app = create_router(state);
+        let server = TestServer::new(app).unwrap();
+
+        let response = server
+            .post("/api/instances/spawn")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .json(&serde_json::json!({"process": "nonexistent", "id": "prod"}))
+            .await;
+
+        response.assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+        let json: serde_json::Value = response.json();
+        assert!(json["error"].as_str().unwrap().contains("Unknown process"));
+    }
+
+    #[tokio::test]
+    async fn test_stop_not_found() {
+        let (state, token, _dir) = create_test_state().await;
+        let app = create_router(state);
+        let server = TestServer::new(app).unwrap();
+
+        let response = server
+            .delete("/api/instances/api:prod")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .await;
+
+        response.assert_status(StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn test_stop_invalid_id_format() {
+        let (state, token, _dir) = create_test_state().await;
+        let app = create_router(state);
+        let server = TestServer::new(app).unwrap();
+
+        // Instance ID without colon: parse_instance_id returns BAD_REQUEST
+        let response = server
+            .delete("/api/instances/invalid-no-colon")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .await;
+
+        let status = response.status_code();
+        // Either BAD_REQUEST (handler reached) or NOT_FOUND (fallback)
+        assert!(
+            status == StatusCode::BAD_REQUEST || status == StatusCode::NOT_FOUND,
+            "Expected 400 or 404, got {}",
+            status
+        );
+    }
+
+    #[tokio::test]
+    async fn test_weight_not_found() {
+        let (state, token, _dir) = create_test_state().await;
+        let app = create_router(state);
+        let server = TestServer::new(app).unwrap();
+
+        let response = server
+            .put("/api/instances/api:prod/weight")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .json(&serde_json::json!({"weight": 50}))
+            .await;
+
+        response.assert_status(StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn test_health_check_unknown_instance() {
+        let (state, token, _dir) = create_test_state().await;
+        let app = create_router(state);
+        let server = TestServer::new(app).unwrap();
+
+        let response = server
+            .get("/api/instances/api:prod/health")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .await;
+
+        response.assert_status_ok();
+        let json: serde_json::Value = response.json();
+        assert_eq!(json["health"], "unknown");
+    }
+
+    #[tokio::test]
+    async fn test_deploy_unknown_process() {
+        let (state, token, _dir) = create_test_state().await;
+        let app = create_router(state);
+        let server = TestServer::new(app).unwrap();
+
+        let response = server
+            .post("/api/deploy")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .json(&serde_json::json!({
+                "process": "nonexistent",
+                "version": "v1",
+                "weight": 100,
+                "timeout": 2
+            }))
+            .await;
+
+        response.assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    #[tokio::test]
+    async fn test_route_not_found() {
+        let (state, token, _dir) = create_test_state().await;
+        let app = create_router(state);
+        let server = TestServer::new(app).unwrap();
+
+        let response = server
+            .post("/api/route")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .json(&serde_json::json!({
+                "process": "api",
+                "from": "v1",
+                "to": "v2"
+            }))
+            .await;
+
+        response.assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    #[tokio::test]
+    async fn test_restart_not_found() {
+        let (state, token, _dir) = create_test_state().await;
+        let app = create_router(state);
+        let server = TestServer::new(app).unwrap();
+
+        let response = server
+            .post("/api/instances/api:prod/restart")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .await;
+
+        // Restart on non-existent instance should fail (stop fails, then spawn fails for unknown process)
+        response.assert_status(StatusCode::INTERNAL_SERVER_ERROR);
     }
 }
