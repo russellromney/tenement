@@ -872,7 +872,13 @@ impl Hypervisor {
         };
 
         for (instance_id, data_dir, quota_mb) in instance_data {
-            let used_bytes = calculate_dir_size(data_dir).await.unwrap_or(0);
+            let used_bytes = match calculate_dir_size(data_dir.clone()).await {
+                Ok(bytes) => bytes,
+                Err(e) => {
+                    error!("Failed to calculate storage for {}: {}", instance_id, e);
+                    continue;
+                }
+            };
 
             // Update cached storage usage on the instance
             {

@@ -226,10 +226,11 @@ impl LogStore {
             WHERE logs_fts MATCH ?
             "#,
         );
-        // Sanitize FTS5 search input: strip metacharacters, wrap in double quotes for phrase search
+        // Sanitize FTS5 search input: strip metacharacters, wrap in double quotes for phrase search.
+        // Keep hyphens (common in identifiers like "api-server") but strip FTS5 operators.
         let sanitized: String = search
             .chars()
-            .filter(|c| !matches!(c, '"' | '*' | '+' | '-' | '(' | ')' | '^' | '{' | '}' | ':'))
+            .filter(|c| !matches!(c, '"' | '*' | '+' | '(' | ')' | '^' | '{' | '}' | ':'))
             .collect();
         let mut params: Vec<String> = vec![format!("\"{}\"", sanitized)];
 
