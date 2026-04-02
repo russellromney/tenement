@@ -19,9 +19,8 @@ See [CHANGELOG.md](CHANGELOG.md) for completed work.
 - Split hypervisor into: lifecycle, health, routing, deploy
 - Split server into: routes, middleware, proxy
 
-### OpenTelemetry integration
-- Distributed tracing
-- Alert webhooks
+### Alert webhooks
+- Configurable webhooks for health state changes, storage warnings, restart loops
 
 ### Service discovery
 - DNS-based service discovery between tenant processes

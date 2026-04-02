@@ -12,6 +12,12 @@
 - Connection draining: stop() waits up to 5s for active connections
 - Connection-aware idle timeout: skip reaping instances with active connections
 
+### Telemetry & Dashboard
+- /api/telemetry endpoint: structured JSON with per-instance request counts, avg latency, health, storage
+- Dashboard rewrite: dark theme, Overview (health grid + metrics table), Instances, Logs tabs
+- Optional OTLP tracing via --features otlp (tracing-opentelemetry + tonic exporter)
+- Structured trace logging on proxy requests
+
 ### Tenant Token Middleware Wiring
 - Auth middleware: tries admin token first, then tenant tokens
 - Admin token: full access to all endpoints
