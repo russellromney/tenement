@@ -1,0 +1,18 @@
+# Multi-tenant notes API
+# Each tenant gets their own process, database, and subdomain.
+#
+# Usage:
+#   ten serve --port 8080 --domain localhost
+#   ten spawn notes:alice
+#   ten spawn notes:bob
+#   curl http://alice.notes.localhost:8080/notes
+
+[service.notes]
+command = "python3 app.py"
+health = "/health"
+idle_timeout = 60
+storage_persist = true
+isolation = "process"
+
+[service.notes.env]
+DATA_DIR = "{data_dir}"
