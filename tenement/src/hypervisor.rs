@@ -364,7 +364,13 @@ impl Hypervisor {
         } {
             let exit_instance_id = instance_id.clone();
             let log_buffer = self.log_buffer.clone();
-            let metrics = self.metrics.clone();
+            // Reference to the instances map so the monitor can check
+            // if the instance was intentionally stopped (removed from map).
+            let instances_ref = unsafe {
+                // SAFETY: The RwLock<HashMap> lives as long as the Arc<Hypervisor>,
+                // which outlives all spawned instances.
+                &*(&self.instances as *const RwLock<HashMap<InstanceId, Instance>>)
+            };
             tokio::spawn(async move {
                 loop {
                     tokio::time::sleep(Duration::from_secs(1)).await;
@@ -375,17 +381,22 @@ impl Hypervisor {
                     let alive = true;
 
                     if !alive {
-                        error!(
-                            "Instance {} (pid {}) exited unexpectedly",
-                            exit_instance_id, pid
-                        );
-                        log_buffer.push_stderr(
-                            &exit_instance_id.process,
-                            &exit_instance_id.id,
-                            format!("Process exited unexpectedly (pid {})", pid),
-                        ).await;
-                        // Health check loop will detect the dead process and restart it.
-                        // We just provide early detection and logging here.
+                        // Check if instance was intentionally stopped (removed from map)
+                        let still_tracked = {
+                            let map = instances_ref.read().await;
+                            map.contains_key(&exit_instance_id)
+                        };
+                        if still_tracked {
+                            error!(
+                                "Instance {} (pid {}) exited unexpectedly",
+                                exit_instance_id, pid
+                            );
+                            log_buffer.push_stderr(
+                                &exit_instance_id.process,
+                                &exit_instance_id.id,
+                                format!("Process exited unexpectedly (pid {})", pid),
+                            ).await;
+                        }
                         break;
                     }
                 }
@@ -1070,20 +1081,29 @@ impl Hypervisor {
 
         // Wake-once pattern: if another request is already waking this instance,
         // wait for it to finish instead of spawning a duplicate.
-        {
+        // Wake-once: if another request is already waking this instance, wait for it.
+        let maybe_notify = {
             let waking = self.waking.read().await;
-            if let Some(notify) = waking.get(&instance_id) {
-                let notify = notify.clone();
-                drop(waking); // Release lock before waiting
-                info!("Instance {} is already being woken, waiting", instance_id);
-                notify.notified().await;
-                // Instance should be ready now. Touch activity and return.
-                if let Some(info) = self.get(process_name, id).await {
-                    self.touch_activity(process_name, id).await;
-                    return Ok(info.socket);
-                }
-                anyhow::bail!("Instance {} failed to wake", instance_id);
+            waking.get(&instance_id).cloned()
+        };
+        if let Some(notify) = maybe_notify {
+            // Register for notification BEFORE checking if spawn is done.
+            // This avoids missing the signal if it fires between our check and await.
+            let notified = notify.notified();
+            info!("Instance {} is already being woken, waiting", instance_id);
+            // Check if instance became available while we were setting up
+            if self.is_running(process_name, id).await {
+                self.touch_activity(process_name, id).await;
+                let info = self.get(process_name, id).await
+                    .ok_or_else(|| anyhow::anyhow!("Instance {} disappeared", instance_id))?;
+                return Ok(info.socket);
             }
+            notified.await;
+            if let Some(info) = self.get(process_name, id).await {
+                self.touch_activity(process_name, id).await;
+                return Ok(info.socket);
+            }
+            anyhow::bail!("Instance {} failed to wake", instance_id);
         }
 
         // We're the first to wake this instance. Register a Notify.
