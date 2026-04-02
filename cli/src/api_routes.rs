@@ -128,7 +128,9 @@ pub async fn post_spawn(
         .and_then(|info| info.port);
 
     // Audit log
-    let _ = state.deploy_log.log("spawn", &req.process, &req.id, None, true).await;
+    if let Err(e) = state.deploy_log.log("spawn", &req.process, &req.id, None, true).await {
+        tracing::error!("Audit log failed: {}", e);
+    }
 
     Ok(Json(SpawnResponse {
         instance: format!("{}:{}", req.process, req.id),
@@ -157,7 +159,9 @@ pub async fn delete_instance(
         })?;
 
     // Audit log
-    let _ = state.deploy_log.log("stop", &process, &instance_id, None, true).await;
+    if let Err(e) = state.deploy_log.log("stop", &process, &instance_id, None, true).await {
+        tracing::error!("Audit log failed: {}", e);
+    }
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -260,13 +264,15 @@ pub async fn post_deploy(
         })?;
 
     // Audit log
-    let _ = state.deploy_log.log(
+    if let Err(e) = state.deploy_log.log(
         "deploy",
         &req.process,
         &req.version,
         Some(&format!("weight={}", req.weight)),
         true,
-    ).await;
+    ).await {
+        tracing::error!("Audit log failed: {}", e);
+    }
 
     Ok(Json(DeployResponse {
         instance: format!("{}:{}", req.process, req.version),
@@ -300,13 +306,15 @@ pub async fn post_route(
         })?;
 
     // Audit log
-    let _ = state.deploy_log.log(
+    if let Err(e) = state.deploy_log.log(
         "route",
         &req.process,
         &format!("{} -> {}", req.from, req.to),
         Some("weight swap: 0/100"),
         true,
-    ).await;
+    ).await {
+        tracing::error!("Audit log failed: {}", e);
+    }
 
     Ok(Json(RouteResponse {
         from_instance: format!("{}:{}", req.process, req.from),

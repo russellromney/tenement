@@ -128,11 +128,13 @@ pub async fn init_db(path: &Path) -> Result<DbPool> {
         CREATE TABLE IF NOT EXISTS tenant_tokens (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             token_hash TEXT NOT NULL,
+            token_prefix TEXT NOT NULL,
             tenant_id TEXT NOT NULL,
             description TEXT,
             created_at TEXT NOT NULL
         );
         CREATE INDEX IF NOT EXISTS idx_tenant_tokens_tenant ON tenant_tokens(tenant_id);
+        CREATE INDEX IF NOT EXISTS idx_tenant_tokens_prefix ON tenant_tokens(token_prefix);
         "#,
     )
     .execute(&pool)
@@ -182,35 +184,43 @@ impl TenantTokenStore {
     }
 
     /// Generate and store a tenant token. Returns the plaintext token.
-    pub fn generate_and_store(
+    pub async fn generate_and_store(
         &self,
         tenant_id: &str,
         description: Option<&str>,
-    ) -> impl std::future::Future<Output = Result<String>> + '_ {
-        let tenant_id = tenant_id.to_string();
-        let description = description.map(|s| s.to_string());
-        async move {
-            let token = crate::auth::generate_token();
-            let hash = crate::auth::hash_token(&token)?;
-            let now = chrono::Utc::now().to_rfc3339();
-            sqlx::query(
-                "INSERT INTO tenant_tokens (token_hash, tenant_id, description, created_at) VALUES (?, ?, ?, ?)",
-            )
-            .bind(&hash)
-            .bind(&tenant_id)
-            .bind(&description)
-            .bind(&now)
-            .execute(&self.pool)
-            .await?;
-            Ok(token)
-        }
+    ) -> Result<String> {
+        let token = crate::auth::generate_token();
+        let hash = crate::auth::hash_token(&token)?;
+        let prefix = &token[..8]; // First 8 chars for fast lookup
+        let now = chrono::Utc::now().to_rfc3339();
+        sqlx::query(
+            "INSERT INTO tenant_tokens (token_hash, token_prefix, tenant_id, description, created_at) VALUES (?, ?, ?, ?, ?)",
+        )
+        .bind(&hash)
+        .bind(prefix)
+        .bind(tenant_id)
+        .bind(description)
+        .bind(&now)
+        .execute(&self.pool)
+        .await?;
+        Ok(token)
     }
 
-    /// Verify a token and return the tenant_id if valid
+    /// Verify a token and return the tenant_id if valid.
+    /// Uses token prefix for fast indexed lookup, then verifies with Argon2.
     pub async fn verify(&self, token: &str) -> Result<Option<String>> {
-        let rows = sqlx::query("SELECT token_hash, tenant_id FROM tenant_tokens")
-            .fetch_all(&self.pool)
-            .await?;
+        if token.len() < 8 {
+            return Ok(None);
+        }
+        let prefix = &token[..8];
+
+        // Narrow to candidates matching the prefix (usually 0 or 1 row)
+        let rows = sqlx::query(
+            "SELECT token_hash, tenant_id FROM tenant_tokens WHERE token_prefix = ?",
+        )
+        .bind(prefix)
+        .fetch_all(&self.pool)
+        .await?;
 
         for row in rows {
             let hash: String = row.get("token_hash");

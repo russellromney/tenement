@@ -790,6 +790,7 @@ async fn proxy_to_instance(
         return (StatusCode::NOT_FOUND, "Not found").into_response();
     }
 
+    let mut resolved_instance_id: Option<String> = None;
     let target = match id {
         Some(instance_id) => {
             // Direct routing to specific instance
@@ -829,6 +830,7 @@ async fn proxy_to_instance(
                 Some(info) => {
                     // Touch activity for the selected instance
                     state.hypervisor.touch_activity(process, &info.id.id).await;
+                    resolved_instance_id = Some(info.id.id.clone());
                     ProxyTarget {
                         socket: info.socket,
                         port: info.port,
@@ -847,9 +849,9 @@ async fn proxy_to_instance(
         }
     };
 
-    // Track active connection (decrements when guard is dropped)
-    let conn_instance = id.unwrap_or("weighted");
-    let _conn_guard = state.hypervisor.connection_start(process, conn_instance).await;
+    // Use the resolved instance ID (from weighted selection or direct routing)
+    let conn_instance_id = resolved_instance_id.as_deref().or(id).unwrap_or("unknown");
+    let _conn_guard = state.hypervisor.connection_start(process, conn_instance_id).await;
 
     // Proxy with request timeout
     let timeout = state.hypervisor.request_timeout(process);
@@ -873,7 +875,7 @@ async fn proxy_to_instance(
 
     // Record request metrics
     let duration_ms = start.elapsed().as_secs_f64() * 1000.0;
-    let instance_id = id.unwrap_or("weighted");
+    let instance_id = conn_instance_id;
     let metrics = state.hypervisor.metrics();
     let mut labels = std::collections::HashMap::new();
     labels.insert("process".to_string(), process.to_string());
