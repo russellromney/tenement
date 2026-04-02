@@ -58,10 +58,19 @@ pub struct AppState {
     pub unix_client: Client<UnixConnector, Body>,
     pub config_store: Arc<ConfigStore>,
     pub deploy_log: Arc<tenement::DeployLogStore>,
+    pub tenant_tokens: Arc<tenement::TenantTokenStore>,
     pub tls_status: TlsStatus,
     /// Tracks failed auth attempts for rate limiting.
     /// Stores (failure_count, last_failure_time). Resets after cooldown.
     pub auth_failures: Arc<tokio::sync::RwLock<(u32, Option<std::time::Instant>)>>,
+}
+
+/// Authenticated caller identity, injected by auth middleware into request extensions.
+/// Admin token: tenant_id is None (full access).
+/// Tenant token: tenant_id is Some("alice") (scoped access).
+#[derive(Clone, Debug)]
+pub struct AuthIdentity {
+    pub tenant_id: Option<String>,
 }
 
 /// Create the router (exposed for testing)
@@ -176,7 +185,7 @@ async fn subdomain_middleware(
 /// Auth middleware - requires Bearer token for API endpoints
 async fn auth_middleware(
     State(state): State<AppState>,
-    req: Request<Body>,
+    mut req: Request<Body>,
     next: Next,
 ) -> Result<Response, StatusCode> {
     let path = req.uri().path();
@@ -218,17 +227,36 @@ async fn auth_middleware(
         }
     }
 
-    // Verify token via Argon2
+    // Try admin token first
     let token_store = TokenStore::new(&state.config_store);
     match token_store.verify(token).await {
         Ok(true) => {
-            // Reset failure counter on success
             let mut failures = state.auth_failures.write().await;
             *failures = (0, None);
+            // Admin token: full access (no tenant scoping)
+            req.extensions_mut().insert(AuthIdentity { tenant_id: None });
+            return Ok(next.run(req).await);
+        }
+        Ok(false) => {} // Not the admin token, try tenant tokens
+        Err(e) => {
+            tracing::error!("Token verification error: {}", e);
+            return Err(StatusCode::INTERNAL_SERVER_ERROR);
+        }
+    }
+
+    // Try tenant token
+    match state.tenant_tokens.verify(token).await {
+        Ok(Some(tenant_id)) => {
+            let mut failures = state.auth_failures.write().await;
+            *failures = (0, None);
+            // Tenant token: scoped access
+            req.extensions_mut().insert(AuthIdentity {
+                tenant_id: Some(tenant_id),
+            });
             Ok(next.run(req).await)
         }
-        Ok(false) => {
-            // Track failure for rate limiting
+        Ok(None) => {
+            // Neither admin nor tenant token matched
             let mut failures = state.auth_failures.write().await;
             failures.0 += 1;
             failures.1 = Some(std::time::Instant::now());
@@ -236,7 +264,7 @@ async fn auth_middleware(
             Err(StatusCode::UNAUTHORIZED)
         }
         Err(e) => {
-            tracing::error!("Token verification error: {}", e);
+            tracing::error!("Tenant token verification error: {}", e);
             Err(StatusCode::INTERNAL_SERVER_ERROR)
         }
     }
@@ -249,6 +277,7 @@ pub async fn serve(
     port: u16,
     config_store: Arc<ConfigStore>,
     deploy_log: Arc<tenement::DeployLogStore>,
+    tenant_tokens: Arc<tenement::TenantTokenStore>,
     tls_options: Option<TlsOptions>,
 ) -> Result<()> {
     // Recover any orphaned instances from a previous crash
@@ -290,6 +319,7 @@ pub async fn serve(
         unix_client,
         config_store,
         deploy_log,
+        tenant_tokens,
         tls_status,
         auth_failures: Arc::new(tokio::sync::RwLock::new((0, None))),
     };
@@ -519,11 +549,21 @@ async fn metrics_endpoint(State(state): State<AppState>) -> impl IntoResponse {
     )
 }
 
-/// List all running instances
-async fn list_instances(State(state): State<AppState>) -> impl IntoResponse {
+/// List all running instances (scoped by tenant token if present)
+async fn list_instances(
+    State(state): State<AppState>,
+    axum::Extension(auth): axum::Extension<AuthIdentity>,
+) -> impl IntoResponse {
     let instances = state.hypervisor.list().await;
     let response: Vec<InstanceInfo> = instances
         .into_iter()
+        .filter(|i| {
+            // Tenant tokens can only see their own instances
+            match &auth.tenant_id {
+                Some(tenant) => &i.id.id == tenant,
+                None => true, // Admin sees everything
+            }
+        })
         .map(|i| InstanceInfo {
             id: i.id.to_string(),
             socket: i.listen_addr(),
@@ -616,8 +656,13 @@ impl From<LogQueryParams> for LogQuery {
 async fn query_logs(
     State(state): State<AppState>,
     Query(params): Query<LogQueryParams>,
+    axum::Extension(auth): axum::Extension<AuthIdentity>,
 ) -> impl IntoResponse {
-    let query: LogQuery = params.into();
+    let mut query: LogQuery = params.into();
+    // Tenant tokens can only see their own logs
+    if let Some(ref tenant) = auth.tenant_id {
+        query.instance_id = Some(tenant.clone());
+    }
     let log_buffer = state.hypervisor.log_buffer();
     let logs = log_buffer.query(&query).await;
     Json(logs)
@@ -1056,7 +1101,8 @@ mod tests {
         let db_path = dir.path().join("test.db");
         let pool = init_db(&db_path).await.unwrap();
         let config_store = Arc::new(ConfigStore::new(pool.clone()));
-        let deploy_log = Arc::new(tenement::DeployLogStore::new(pool));
+        let deploy_log = Arc::new(tenement::DeployLogStore::new(pool.clone()));
+        let tenant_tokens = Arc::new(tenement::TenantTokenStore::new(pool));
 
         // Generate and store a test token
         let token_store = TokenStore::new(&config_store);
@@ -1073,6 +1119,7 @@ mod tests {
             unix_client,
             config_store,
             deploy_log,
+            tenant_tokens,
             tls_status: TlsStatus::default(),
             auth_failures: Arc::new(tokio::sync::RwLock::new((0, None))),
         };
@@ -1487,5 +1534,166 @@ mod tests {
 
         // Restart on non-existent instance should fail (stop fails, then spawn fails for unknown process)
         response.assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    // ===================
+    // TENANT TOKEN TESTS
+    // ===================
+
+    /// Create test state with both admin and tenant tokens
+    async fn create_test_state_with_tenant() -> (AppState, String, String, TempDir) {
+        let dir = TempDir::new().unwrap();
+        let db_path = dir.path().join("test.db");
+        let pool = init_db(&db_path).await.unwrap();
+        let config_store = Arc::new(ConfigStore::new(pool.clone()));
+        let deploy_log = Arc::new(tenement::DeployLogStore::new(pool.clone()));
+        let tenant_tokens = Arc::new(tenement::TenantTokenStore::new(pool.clone()));
+
+        // Generate admin token
+        let token_store = TokenStore::new(&config_store);
+        let admin_token = token_store.generate_and_store().await.unwrap();
+
+        // Generate tenant token for "alice"
+        let tenant_token = tenant_tokens
+            .generate_and_store("alice", Some("test"))
+            .await
+            .unwrap();
+
+        let config = Config::default();
+        let hypervisor = Hypervisor::new(config);
+        let client = Client::builder(TokioExecutor::new()).build_http();
+        let unix_client = Client::builder(TokioExecutor::new()).build(UnixConnector);
+        let state = AppState {
+            hypervisor,
+            domain: "example.com".to_string(),
+            client,
+            unix_client,
+            config_store,
+            deploy_log,
+            tenant_tokens,
+            tls_status: TlsStatus::default(),
+            auth_failures: Arc::new(tokio::sync::RwLock::new((0, None))),
+        };
+        (state, admin_token, tenant_token, dir)
+    }
+
+    #[tokio::test]
+    async fn test_tenant_token_can_list_instances() {
+        let (state, _admin, tenant, _dir) = create_test_state_with_tenant().await;
+        let app = create_router(state);
+        let server = TestServer::new(app).unwrap();
+
+        // Tenant token should be able to list (will see only their instances)
+        let response = server
+            .get("/api/instances")
+            .add_header("Authorization", format!("Bearer {}", tenant))
+            .await;
+        response.assert_status_ok();
+    }
+
+    #[tokio::test]
+    async fn test_tenant_token_cannot_deploy() {
+        let (state, _admin, tenant, _dir) = create_test_state_with_tenant().await;
+        let app = create_router(state);
+        let server = TestServer::new(app).unwrap();
+
+        // Tenant token should be rejected for deploy
+        let response = server
+            .post("/api/deploy")
+            .add_header("Authorization", format!("Bearer {}", tenant))
+            .json(&serde_json::json!({
+                "process": "api",
+                "version": "v1",
+                "weight": 100,
+                "timeout": 2
+            }))
+            .await;
+        response.assert_status(StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn test_tenant_token_cannot_route() {
+        let (state, _admin, tenant, _dir) = create_test_state_with_tenant().await;
+        let app = create_router(state);
+        let server = TestServer::new(app).unwrap();
+
+        // Tenant token should be rejected for route swap
+        let response = server
+            .post("/api/route")
+            .add_header("Authorization", format!("Bearer {}", tenant))
+            .json(&serde_json::json!({
+                "process": "api",
+                "from": "v1",
+                "to": "v2"
+            }))
+            .await;
+        response.assert_status(StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn test_tenant_token_scoped_to_own_instances() {
+        let (state, _admin, tenant, _dir) = create_test_state_with_tenant().await;
+        let app = create_router(state);
+        let server = TestServer::new(app).unwrap();
+
+        // Tenant "alice" should be rejected when trying to stop "bob"
+        let response = server
+            .delete("/api/instances/api:bob")
+            .add_header("Authorization", format!("Bearer {}", tenant))
+            .await;
+        response.assert_status(StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn test_admin_token_has_full_access() {
+        let (state, admin, _tenant, _dir) = create_test_state_with_tenant().await;
+        let app = create_router(state);
+        let server = TestServer::new(app).unwrap();
+
+        // Admin can access any instance
+        let response = server
+            .get("/api/instances")
+            .add_header("Authorization", format!("Bearer {}", admin))
+            .await;
+        response.assert_status_ok();
+
+        // Admin can deploy
+        let response = server
+            .post("/api/deploy")
+            .add_header("Authorization", format!("Bearer {}", admin))
+            .json(&serde_json::json!({
+                "process": "nonexistent",
+                "version": "v1",
+                "weight": 100,
+                "timeout": 1
+            }))
+            .await;
+        // Will fail because process doesn't exist, but NOT because of auth
+        assert_ne!(response.status_code(), StatusCode::FORBIDDEN);
+        assert_ne!(response.status_code(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn test_tenant_token_scoped_logs() {
+        let (state, _admin, tenant, _dir) = create_test_state_with_tenant().await;
+        let log_buffer = state.hypervisor.log_buffer();
+
+        // Add logs for different instances
+        log_buffer.push_stdout("api", "alice", "alice's log".to_string()).await;
+        log_buffer.push_stdout("api", "bob", "bob's log".to_string()).await;
+
+        let app = create_router(state);
+        let server = TestServer::new(app).unwrap();
+
+        // Tenant "alice" should only see alice's logs
+        let response = server
+            .get("/api/logs")
+            .add_header("Authorization", format!("Bearer {}", tenant))
+            .await;
+        response.assert_status_ok();
+
+        let json: Vec<serde_json::Value> = response.json();
+        assert_eq!(json.len(), 1, "Tenant should only see their own logs");
+        assert_eq!(json[0]["instance_id"], "alice");
     }
 }

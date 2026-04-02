@@ -125,8 +125,15 @@ enum Commands {
     },
     /// Show config
     Config,
-    /// Generate a new API token
-    TokenGen,
+    /// Generate a new API token (admin or tenant-scoped)
+    TokenGen {
+        /// Generate a tenant-scoped token (can only access this tenant's instances/logs)
+        #[arg(long)]
+        tenant: Option<String>,
+        /// Description for the token
+        #[arg(long)]
+        description: Option<String>,
+    },
     /// Install tenement as a systemd service
     Install {
         /// Domain for the service (e.g., example.com)
@@ -330,25 +337,41 @@ async fn main() -> Result<()> {
                 }
             }
         }
-        Commands::TokenGen => {
+        Commands::TokenGen { tenant, description } => {
             let config = Config::load()?;
             let data_dir = PathBuf::from(&config.settings.data_dir);
             let db_path = data_dir.join("tenement.db");
             let pool = init_db(&db_path).await?;
-            let config_store = ConfigStore::new(pool);
-            let token_store = TokenStore::new(&config_store);
 
-            let token = token_store.generate_and_store().await?;
+            if let Some(tenant_id) = tenant {
+                // Generate tenant-scoped token
+                let tenant_store = tenement::TenantTokenStore::new(pool);
+                let token = tenant_store
+                    .generate_and_store(&tenant_id, description.as_deref())
+                    .await?;
 
-            // Save plaintext token to file for CLI auto-read
-            client::save_token_file(&data_dir, &token)?;
+                println!("Generated tenant token for '{}':", tenant_id);
+                println!();
+                println!("  {}", token);
+                println!();
+                println!("This token can only access instances/logs for tenant '{}'.", tenant_id);
+                println!("Deploy and route operations are admin-only.");
+            } else {
+                // Generate admin token
+                let config_store = ConfigStore::new(pool);
+                let token_store = TokenStore::new(&config_store);
+                let token = token_store.generate_and_store().await?;
 
-            println!("Generated new API token:");
-            println!();
-            println!("  {}", token);
-            println!();
-            println!("Token saved to {}/api_token", data_dir.display());
-            println!("Use it in the Authorization header: Bearer {}", token);
+                // Save plaintext token to file for CLI auto-read
+                client::save_token_file(&data_dir, &token)?;
+
+                println!("Generated admin API token:");
+                println!();
+                println!("  {}", token);
+                println!();
+                println!("Token saved to {}/api_token", data_dir.display());
+                println!("Use it in the Authorization header: Bearer {}", token);
+            }
         }
         Commands::Install { domain, port, config, dry_run, caddy: with_caddy, dns_provider } => {
             install::install(domain, port, config, dry_run, with_caddy, dns_provider)?;
@@ -377,7 +400,8 @@ async fn cmd_serve(
     let pool = init_db(&db_path).await?;
     let config_store = std::sync::Arc::new(ConfigStore::new(pool.clone()));
     let state_store = std::sync::Arc::new(tenement::StateStore::new(pool.clone()));
-    let deploy_log = std::sync::Arc::new(tenement::DeployLogStore::new(pool));
+    let deploy_log = std::sync::Arc::new(tenement::DeployLogStore::new(pool.clone()));
+    let tenant_tokens = std::sync::Arc::new(tenement::TenantTokenStore::new(pool));
 
     let tls_options = if tls {
         let acme_email = email
@@ -457,7 +481,7 @@ async fn cmd_serve(
     }
 
     let hypervisor = Hypervisor::with_state_store(config, state_store);
-    server::serve(hypervisor, domain, port, config_store, deploy_log, tls_options).await?;
+    server::serve(hypervisor, domain, port, config_store, deploy_log, tenant_tokens, tls_options).await?;
     Ok(())
 }
 

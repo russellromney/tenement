@@ -107,8 +107,10 @@ impl ApiError {
 /// Spawn a new instance: POST /api/instances/spawn
 pub async fn post_spawn(
     State(state): State<AppState>,
+    axum::Extension(auth): axum::Extension<crate::server::AuthIdentity>,
     Json(req): Json<SpawnRequest>,
 ) -> Result<Json<SpawnResponse>, (StatusCode, Json<ApiError>)> {
+    check_tenant_access(&auth, &req.id)?;
     let socket = state
         .hypervisor
         .spawn(&req.process, &req.id)
@@ -142,9 +144,11 @@ pub async fn post_spawn(
 /// Stop an instance: DELETE /api/instances/{process:id}
 pub async fn delete_instance(
     State(state): State<AppState>,
+    axum::Extension(auth): axum::Extension<crate::server::AuthIdentity>,
     Path(id): Path<String>,
 ) -> Result<StatusCode, (StatusCode, Json<ApiError>)> {
     let (process, instance_id) = parse_instance_id(&id)?;
+    check_tenant_access(&auth, &instance_id)?;
 
     state
         .hypervisor
@@ -169,9 +173,11 @@ pub async fn delete_instance(
 /// Restart an instance: POST /api/instances/{process:id}/restart
 pub async fn post_restart(
     State(state): State<AppState>,
+    axum::Extension(auth): axum::Extension<crate::server::AuthIdentity>,
     Path(id): Path<String>,
 ) -> Result<Json<SpawnResponse>, (StatusCode, Json<ApiError>)> {
     let (process, instance_id) = parse_instance_id(&id)?;
+    check_tenant_access(&auth, &instance_id)?;
 
     let socket = state
         .hypervisor
@@ -201,10 +207,12 @@ pub async fn post_restart(
 /// Set weight: PUT /api/instances/{process:id}/weight
 pub async fn put_weight(
     State(state): State<AppState>,
+    axum::Extension(auth): axum::Extension<crate::server::AuthIdentity>,
     Path(id): Path<String>,
     Json(req): Json<WeightRequest>,
 ) -> Result<Json<WeightResponse>, (StatusCode, Json<ApiError>)> {
     let (process, instance_id) = parse_instance_id(&id)?;
+    check_tenant_access(&auth, &instance_id)?;
 
     state
         .hypervisor
@@ -226,9 +234,11 @@ pub async fn put_weight(
 /// Check health: GET /api/instances/{process:id}/health
 pub async fn get_health_check(
     State(state): State<AppState>,
+    axum::Extension(auth): axum::Extension<crate::server::AuthIdentity>,
     Path(id): Path<String>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
     let (process, instance_id) = parse_instance_id(&id)?;
+    check_tenant_access(&auth, &instance_id)?;
 
     let status = state
         .hypervisor
@@ -241,11 +251,18 @@ pub async fn get_health_check(
     })))
 }
 
-/// Deploy: POST /api/deploy
+/// Deploy: POST /api/deploy (admin only)
 pub async fn post_deploy(
     State(state): State<AppState>,
+    axum::Extension(auth): axum::Extension<crate::server::AuthIdentity>,
     Json(req): Json<DeployRequest>,
 ) -> Result<Json<DeployResponse>, (StatusCode, Json<ApiError>)> {
+    if auth.tenant_id.is_some() {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(ApiError::new("Deploy requires admin token")),
+        ));
+    }
     let socket = state
         .hypervisor
         .deploy_and_wait_healthy(&req.process, &req.version, req.weight, req.timeout)
@@ -282,11 +299,18 @@ pub async fn post_deploy(
     }))
 }
 
-/// Route swap: POST /api/route
+/// Route swap: POST /api/route (admin only)
 pub async fn post_route(
     State(state): State<AppState>,
+    axum::Extension(auth): axum::Extension<crate::server::AuthIdentity>,
     Json(req): Json<RouteRequest>,
 ) -> Result<Json<RouteResponse>, (StatusCode, Json<ApiError>)> {
+    if auth.tenant_id.is_some() {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(ApiError::new("Route swap requires admin token")),
+        ));
+    }
     state
         .hypervisor
         .route_swap(&req.process, &req.from, &req.to)
@@ -327,6 +351,27 @@ pub async fn post_route(
 // ===================
 // Helpers
 // ===================
+
+/// Check that a tenant token is authorized to access the given instance ID.
+/// Admin tokens (tenant_id = None) have full access.
+/// Tenant tokens can only access instances where the instance ID matches their tenant_id.
+fn check_tenant_access(
+    auth: &crate::server::AuthIdentity,
+    instance_id: &str,
+) -> Result<(), (StatusCode, Json<ApiError>)> {
+    if let Some(ref tenant) = auth.tenant_id {
+        if tenant != instance_id {
+            return Err((
+                StatusCode::FORBIDDEN,
+                Json(ApiError::new(format!(
+                    "Tenant token can only access instance '{}'",
+                    tenant
+                ))),
+            ));
+        }
+    }
+    Ok(())
+}
 
 fn parse_instance_id(s: &str) -> Result<(String, String), (StatusCode, Json<ApiError>)> {
     let parts: Vec<&str> = s.splitn(2, ':').collect();

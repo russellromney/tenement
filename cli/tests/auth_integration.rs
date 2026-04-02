@@ -17,7 +17,8 @@ async fn setup_test_server() -> (TestServer, String, Arc<ConfigStore>, TempDir) 
     let db_path = dir.path().join("test.db");
     let pool = init_db(&db_path).await.unwrap();
     let config_store = Arc::new(ConfigStore::new(pool.clone()));
-    let deploy_log = Arc::new(tenement::DeployLogStore::new(pool));
+    let deploy_log = Arc::new(tenement::DeployLogStore::new(pool.clone()));
+    let tenant_tokens = Arc::new(tenement::TenantTokenStore::new(pool));
 
     // Generate and store a test token
     let token_store = TokenStore::new(&config_store);
@@ -34,6 +35,7 @@ async fn setup_test_server() -> (TestServer, String, Arc<ConfigStore>, TempDir) 
         unix_client,
         config_store: config_store.clone(),
         deploy_log: deploy_log.clone(),
+        tenant_tokens: tenant_tokens.clone(),
         tls_status: TlsStatus::default(),
         auth_failures: std::sync::Arc::new(tokio::sync::RwLock::new((0, None))),
     };
@@ -777,7 +779,8 @@ async fn test_no_token_configured() {
     let db_path = dir.path().join("test.db");
     let pool = init_db(&db_path).await.unwrap();
     let config_store = Arc::new(ConfigStore::new(pool.clone()));
-    let deploy_log = Arc::new(tenement::DeployLogStore::new(pool));
+    let deploy_log = Arc::new(tenement::DeployLogStore::new(pool.clone()));
+    let tenant_tokens = Arc::new(tenement::TenantTokenStore::new(pool));
 
     // Don't generate a token - leave it empty
     let config = Config::default();
@@ -791,6 +794,7 @@ async fn test_no_token_configured() {
         unix_client,
         config_store,
         deploy_log,
+        tenant_tokens,
         tls_status: TlsStatus::default(),
         auth_failures: std::sync::Arc::new(tokio::sync::RwLock::new((0, None))),
     };
