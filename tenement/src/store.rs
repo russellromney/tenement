@@ -105,6 +105,23 @@ pub async fn init_db(path: &Path) -> Result<DbPool> {
     .await
     .context("Failed to create config table")?;
 
+    // Create instance state table (for crash recovery)
+    sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS instance_state (
+            instance_id TEXT PRIMARY KEY,
+            process_name TEXT NOT NULL,
+            id TEXT NOT NULL,
+            pid INTEGER NOT NULL,
+            port INTEGER,
+            started_at TEXT NOT NULL
+        );
+        "#,
+    )
+    .execute(&pool)
+    .await
+    .context("Failed to create instance_state table")?;
+
     info!("Database initialized at {:?}", path);
     Ok(pool)
 }
@@ -462,6 +479,80 @@ impl ConfigStore {
             .execute(&self.pool)
             .await?;
         Ok(result.rows_affected() > 0)
+    }
+}
+
+/// Persisted instance state for crash recovery
+#[derive(Debug, Clone)]
+pub struct InstanceState {
+    pub instance_id: String,
+    pub process_name: String,
+    pub id: String,
+    pub pid: u32,
+    pub port: Option<u16>,
+    pub started_at: String,
+}
+
+/// Store for instance state persistence (crash recovery)
+pub struct StateStore {
+    pool: DbPool,
+}
+
+impl StateStore {
+    pub fn new(pool: DbPool) -> Self {
+        Self { pool }
+    }
+
+    /// Record a running instance
+    pub async fn save(&self, state: &InstanceState) -> Result<()> {
+        sqlx::query(
+            "INSERT OR REPLACE INTO instance_state (instance_id, process_name, id, pid, port, started_at) VALUES (?, ?, ?, ?, ?, ?)",
+        )
+        .bind(&state.instance_id)
+        .bind(&state.process_name)
+        .bind(&state.id)
+        .bind(state.pid as i64)
+        .bind(state.port.map(|p| p as i64))
+        .bind(&state.started_at)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Remove an instance record (called on stop)
+    pub async fn remove(&self, instance_id: &str) -> Result<()> {
+        sqlx::query("DELETE FROM instance_state WHERE instance_id = ?")
+            .bind(instance_id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    /// Get all persisted instance states (called on startup for recovery)
+    pub async fn list(&self) -> Result<Vec<InstanceState>> {
+        let rows = sqlx::query("SELECT instance_id, process_name, id, pid, port, started_at FROM instance_state")
+            .fetch_all(&self.pool)
+            .await?;
+
+        Ok(rows
+            .into_iter()
+            .map(|row| InstanceState {
+                instance_id: row.get("instance_id"),
+                process_name: row.get("process_name"),
+                id: row.get("id"),
+                pid: row.get::<i64, _>("pid") as u32,
+                port: row.get::<Option<i64>, _>("port").map(|p| p as u16),
+                started_at: row.get("started_at"),
+            })
+            .collect())
+    }
+
+    /// Clear all instance state (called after recovery)
+    pub async fn clear_all(&self) -> Result<()> {
+        sqlx::query("DELETE FROM instance_state")
+            .execute(&self.pool)
+            .await?;
+        Ok(())
     }
 }
 

@@ -248,6 +248,9 @@ pub async fn serve(
     config_store: Arc<ConfigStore>,
     tls_options: Option<TlsOptions>,
 ) -> Result<()> {
+    // Recover any orphaned instances from a previous crash
+    hypervisor.recover_orphans().await;
+
     // Spawn configured instances before accepting connections
     let (success, failed) = hypervisor.spawn_configured_instances().await;
     if failed > 0 {

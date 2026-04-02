@@ -226,10 +226,10 @@ pub struct ProcessConfig {
     #[serde(default)]
     pub storage_quota_mb: Option<u32>,
 
-    /// Keep data directory on stop (default: false)
+    /// Keep data directory on stop (default: true)
+    /// If true, data is preserved for the next spawn (databases, files, etc.)
     /// If false, the instance's data directory is deleted when stopped.
-    /// If true, data is preserved for the next spawn.
-    #[serde(default)]
+    #[serde(default = "default_storage_persist")]
     pub storage_persist: bool,
 
     // --- Firecracker/QEMU-specific fields ---
@@ -273,6 +273,10 @@ fn default_socket() -> String {
 
 fn default_restart_policy() -> String {
     "on-failure".to_string()
+}
+
+fn default_storage_persist() -> bool {
+    true
 }
 
 fn default_startup_timeout() -> u64 {
@@ -1087,7 +1091,7 @@ storage_quota_mb = 512
         let api = config.get_service("api").unwrap();
 
         assert_eq!(api.storage_quota_mb, Some(512));
-        assert!(!api.storage_persist); // Default false
+        assert!(api.storage_persist); // Default true (preserves tenant data)
     }
 
     #[test]
@@ -1130,7 +1134,7 @@ command = "./api"
 
         // Both should have defaults
         assert_eq!(api.storage_quota_mb, None);
-        assert!(!api.storage_persist);
+        assert!(api.storage_persist); // Default true
     }
 
     #[test]

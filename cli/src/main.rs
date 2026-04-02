@@ -375,7 +375,8 @@ async fn cmd_serve(
     let config = Config::load()?;
     let db_path = PathBuf::from(&config.settings.data_dir).join("tenement.db");
     let pool = init_db(&db_path).await?;
-    let config_store = std::sync::Arc::new(ConfigStore::new(pool));
+    let config_store = std::sync::Arc::new(ConfigStore::new(pool.clone()));
+    let state_store = std::sync::Arc::new(tenement::StateStore::new(pool));
 
     let tls_options = if tls {
         let acme_email = email
@@ -454,7 +455,7 @@ async fn cmd_serve(
         }
     }
 
-    let hypervisor = Hypervisor::new(config);
+    let hypervisor = Hypervisor::with_state_store(config, state_store);
     server::serve(hypervisor, domain, port, config_store, tls_options).await?;
     Ok(())
 }

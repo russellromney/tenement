@@ -27,4 +27,4 @@ pub use runtime::{ProcessRuntime, Runtime, RuntimeHandle, RuntimeType, SpawnConf
 #[cfg(feature = "sandbox")]
 pub use runtime::SandboxRuntime;
 pub use storage::{calculate_dir_size, format_bytes, StorageInfo};
-pub use store::{init_db, ConfigStore, DbPool, LogStore};
+pub use store::{init_db, ConfigStore, DbPool, InstanceState, LogStore, StateStore};

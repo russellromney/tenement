@@ -47,6 +47,8 @@ pub struct Hypervisor {
     sandbox_runtime: SandboxRuntime,
     /// Cgroup manager for resource limits (Linux cgroups v2)
     cgroup_manager: CgroupManager,
+    /// Optional state store for crash recovery persistence
+    state_store: Option<Arc<crate::store::StateStore>>,
 }
 
 impl Hypervisor {
@@ -70,6 +72,7 @@ impl Hypervisor {
             #[cfg(feature = "sandbox")]
             sandbox_runtime: SandboxRuntime::new(),
             cgroup_manager,
+            state_store: None,
         })
     }
 
@@ -93,7 +96,16 @@ impl Hypervisor {
             #[cfg(feature = "sandbox")]
             sandbox_runtime: SandboxRuntime::new(),
             cgroup_manager,
+            state_store: None,
         })
+    }
+
+    /// Create a new hypervisor with a state store for crash recovery
+    pub fn with_state_store(config: Config, state_store: Arc<crate::store::StateStore>) -> Arc<Self> {
+        let mut hyp = Self::new(config);
+        // SAFETY: Arc::get_mut works because we just created this Arc and hold the only reference
+        Arc::get_mut(&mut hyp).expect("just created Arc").state_store = Some(state_store);
+        hyp
     }
 
     /// Get the log buffer
@@ -260,14 +272,20 @@ impl Hypervisor {
             cpu_shares: process_config.cpu_shares,
         };
         if resource_limits.has_limits() {
-            // Create cgroup for this instance
-            if let Err(e) = self.cgroup_manager.create_cgroup(&instance_id.to_string(), &resource_limits) {
-                warn!("Failed to create cgroup for {}: {}", instance_id, e);
-            } else if let Some(pid) = handle.pid() {
-                // Add process to the cgroup
-                if let Err(e) = self.cgroup_manager.add_process(&instance_id.to_string(), pid, &resource_limits) {
-                    warn!("Failed to add process to cgroup for {}: {}", instance_id, e);
-                }
+            // Create cgroup and add process. Fail loudly if resource limits are
+            // configured but can't be applied (process would run unrestricted).
+            self.cgroup_manager
+                .create_cgroup(&instance_id.to_string(), &resource_limits)
+                .with_context(|| format!(
+                    "Failed to create cgroup for {}. Resource limits will not be enforced.", instance_id
+                ))?;
+
+            if let Some(pid) = handle.pid() {
+                self.cgroup_manager
+                    .add_process(&instance_id.to_string(), pid, &resource_limits)
+                    .with_context(|| format!(
+                        "Failed to add process to cgroup for {}. Resource limits will not be enforced.", instance_id
+                    ))?;
             }
         }
 
@@ -355,6 +373,25 @@ impl Hypervisor {
 
         // Update metrics
         self.metrics.instances_up.inc();
+
+        // Persist instance state for crash recovery
+        if let Some(ref store) = self.state_store {
+            let pid = {
+                let instances = self.instances.read().await;
+                instances.get(&instance_id).and_then(|i| i.handle.pid()).unwrap_or(0)
+            };
+            let state = crate::store::InstanceState {
+                instance_id: instance_id.to_string(),
+                process_name: process_name.to_string(),
+                id: id.to_string(),
+                pid,
+                port,
+                started_at: chrono::Utc::now().to_rfc3339(),
+            };
+            if let Err(e) = store.save(&state).await {
+                error!("Failed to persist instance state for {}: {}", instance_id, e);
+            }
+        }
 
         // Spawn exit monitor: detects process exit within 1s instead of
         // waiting for the next health check cycle (up to 10s).
@@ -500,6 +537,13 @@ impl Hypervisor {
 
             // Update metrics
             self.metrics.instances_up.dec();
+
+            // Remove persisted state
+            if let Some(ref store) = self.state_store {
+                if let Err(e) = store.remove(&instance_id.to_string()).await {
+                    error!("Failed to remove instance state for {}: {}", instance_id, e);
+                }
+            }
 
             Ok(())
         } else {
@@ -1022,6 +1066,66 @@ impl Hypervisor {
                 }
             }
         }
+    }
+
+    /// Recover orphaned instances from a previous crash.
+    /// Checks persisted state, kills any still-running orphans, and cleans up.
+    /// Called on startup before spawning configured instances.
+    pub async fn recover_orphans(&self) {
+        let store = match &self.state_store {
+            Some(s) => s,
+            None => return,
+        };
+
+        let states = match store.list().await {
+            Ok(s) => s,
+            Err(e) => {
+                error!("Failed to read instance state for recovery: {}", e);
+                return;
+            }
+        };
+
+        if states.is_empty() {
+            return;
+        }
+
+        info!("Found {} orphaned instance(s) from previous run", states.len());
+
+        for state in &states {
+            // Check if process is still alive
+            #[cfg(unix)]
+            let alive = unsafe { libc::kill(state.pid as i32, 0) } == 0;
+            #[cfg(not(unix))]
+            let alive = false;
+
+            if alive {
+                info!(
+                    "Killing orphaned process {} (pid {})",
+                    state.instance_id, state.pid
+                );
+                #[cfg(unix)]
+                unsafe {
+                    libc::kill(state.pid as i32, libc::SIGKILL);
+                }
+
+                // Release the port if it was allocated
+                if let Some(port) = state.port {
+                    self.port_allocator.release(port).await;
+                }
+            } else {
+                info!(
+                    "Orphaned process {} (pid {}) already exited",
+                    state.instance_id, state.pid
+                );
+            }
+        }
+
+        // Clear all persisted state
+        if let Err(e) = store.clear_all().await {
+            error!("Failed to clear instance state after recovery: {}", e);
+        }
+
+        info!("Orphan recovery complete");
     }
 
     /// Spawn all instances configured in [instances] section.
