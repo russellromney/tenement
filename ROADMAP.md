@@ -11,34 +11,6 @@ See [CHANGELOG.md](CHANGELOG.md) for completed work.
 - Needs design decision: switch to Unix socket communication, or implement full container networking
 - Revisit when the single-server story is more mature
 
-## Phase Counterfeit -- Fix Fake Features
-> After: Phase Break Stuff · Before: Phase Rollin
-
-Features that exist in code but don't actually work end-to-end.
-
-### a. Record request metrics
-- `requests_total` and `request_duration_ms` are defined in Metrics but never incremented
-- The proxy path doesn't count requests or measure latency
-- Add ~20 lines of middleware to record per-tenant request count and duration
-- The Prometheus endpoint currently shows zeros for these; make it real
-
-### b. Storage quota enforcement
-- `storage_quota_mb` is a config option that does nothing
-- No periodic check, no warnings emitted, no metrics updated
-- The health monitor should check storage usage, emit warnings at 80%/90%, update `instance_storage_bytes` gauge
-- Decide: hard kill at 100%? or just loud warnings + metrics?
-
-### c. Defer slum
-- `slum` is 90% CRUD with no health checking, no real proxying, no failover
-- It's a distraction from making the core product solid
-- Move to a separate repo or gate behind a feature flag
-- Revisit after the single-server story is airtight
-
-### d. FTS5 search injection
-- FTS5 MATCH queries accept special syntax (NOT, OR, NEAR, column filters)
-- User search input is wrapped in double quotes but not properly escaped for FTS5
-- Sanitize or use parameterized FTS5 queries
-
 ## Phase Rollin -- Process Reliability
 > After: Phase Counterfeit · Before: Phase Re-Arranged
 

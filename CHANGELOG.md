@@ -2,6 +2,13 @@
 
 ## v0.2.0
 
+### Phase Counterfeit (Fix Fake Features)
+- Request metrics now recorded in proxy: requests_total and request_duration_ms per process/instance
+- Storage quota enforcement: health monitor checks usage, updates metrics, warns at 80%, errors at 100%
+- Removed slum from workspace (was 90% CRUD with no real functionality)
+- FTS5 search injection fix: strip metacharacters from user search input
+- Removed backward-compat code: [process.X] alias, deprecated methods, runtime serde alias
+
 ### Phase Break Stuff (Security Hardening)
 - Auth DoS prevention: rate limiting on failed auth attempts (10 failures triggers 5-second cooldown, skipping Argon2)
 - Spawn race condition fix: "spawning" guard set prevents concurrent spawns of the same instance
