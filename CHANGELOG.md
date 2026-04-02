@@ -2,6 +2,12 @@
 
 ## v0.2.0
 
+### Phase Re-Arranged (State & Persistence)
+- Persistent instance state: SQLite table records pid/port/started_at per instance for crash recovery
+- Orphan recovery on startup: kills still-running processes from previous crashes
+- Default storage_persist to true: tenant data directories preserved across idle cycles
+- Cgroup failure handling: spawn fails loudly if resource limits can't be applied (was warn-and-continue)
+
 ### Phase Rollin (Process Reliability)
 - Process exit monitoring: detects crashes within 1s via kill(pid, 0) background task
 - Restart history persistence: restart count and timestamps survive stop/spawn cycles

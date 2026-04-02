@@ -11,24 +11,6 @@ See [CHANGELOG.md](CHANGELOG.md) for completed work.
 - Needs design decision: switch to Unix socket communication, or implement full container networking
 - Revisit when the single-server story is more mature
 
-## Phase Re-Arranged -- State & Persistence
-> After: Phase Rollin · Before: Phase Nookie
-
-### a. Persistent instance state
-- All instance state is in-memory; a tenement crash loses knowledge of running processes
-- Orphaned processes keep running on their ports with no management
-- Write state to SQLite: `{instance_id, pid, port, started_at, process_config_hash}`
-- On startup: re-adopt orphaned processes or kill them
-
-### b. Default `storage_persist` to `true`
-- Current default of `false` silently destroys tenant data directories on idle timeout
-- For the stated use case (databases per tenant), this causes data loss every idle cycle
-- Change default, add migration note
-
-### c. Cgroup failure handling
-- Cgroup creation failure currently `warn!`s and continues
-- Process runs unrestricted; one tenant can OOM the whole server
-- Fail loudly when resource limits are configured but can't be applied
 
 ## Phase Nookie -- Multi-Tenant Demo & Getting Started
 > After: Phase Re-Arranged · Before: Phase Full Nelson
