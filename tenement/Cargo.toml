@@ -34,6 +34,10 @@ base64.workspace = true
 async-trait = "0.1"
 uuid = { version = "1", features = ["v4"], optional = true }
 
+# Unix process monitoring (kill(pid, 0) for exit detection)
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 # Linux namespace isolation (always enabled on Linux)
 [target.'cfg(target_os = "linux")'.dependencies]
 nix = { version = "0.29", features = ["sched", "mount", "process"] }

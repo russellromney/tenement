@@ -95,6 +95,37 @@ pub fn create_router(state: AppState) -> Router {
         .with_state(state)
 }
 
+/// Wait for shutdown signal (SIGTERM or SIGINT), then stop all instances.
+async fn shutdown_signal(hypervisor: Arc<Hypervisor>) {
+    let ctrl_c = async {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("failed to install Ctrl+C handler");
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("failed to install SIGTERM handler")
+            .recv()
+            .await;
+    };
+
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => {
+            tracing::info!("Received Ctrl+C, shutting down");
+        },
+        _ = terminate => {
+            tracing::info!("Received SIGTERM, shutting down");
+        },
+    }
+
+    hypervisor.stop_all().await;
+}
+
 /// Constant-time byte comparison to prevent timing attacks on token verification
 fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     if a.len() != b.len() {
@@ -273,7 +304,10 @@ async fn serve_http_only(state: AppState, port: u16) -> Result<()> {
     tracing::info!("tenement listening on http://{}", addr);
     tracing::info!("Dashboard at http://{}", state.domain);
 
-    axum::serve(listener, app).await?;
+    let hypervisor = state.hypervisor.clone();
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal(hypervisor))
+        .await?;
     Ok(())
 }
 

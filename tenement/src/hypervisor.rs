@@ -28,6 +28,12 @@ pub struct Hypervisor {
     /// Guard against concurrent spawns of the same instance.
     /// An instance ID is added before spawn begins and removed after it completes.
     spawning: RwLock<std::collections::HashSet<InstanceId>>,
+    /// Wake-once notifications: when an instance is being woken, other requests
+    /// wait on the Notify instead of spawning duplicate processes.
+    waking: RwLock<HashMap<InstanceId, Arc<tokio::sync::Notify>>>,
+    /// Restart history that persists across stop/spawn cycles.
+    /// Maps instance ID to (restart_count, restart_times).
+    restart_history: RwLock<HashMap<InstanceId, (u32, Vec<Instant>)>>,
     log_buffer: Arc<LogBuffer>,
     metrics: Arc<Metrics>,
     /// Port allocator for TCP ports (30000-40000)
@@ -54,6 +60,8 @@ impl Hypervisor {
             config,
             instances: RwLock::new(HashMap::new()),
             spawning: RwLock::new(std::collections::HashSet::new()),
+            waking: RwLock::new(HashMap::new()),
+            restart_history: RwLock::new(HashMap::new()),
             log_buffer: LogBuffer::new(),
             metrics: Metrics::new(),
             port_allocator,
@@ -75,6 +83,8 @@ impl Hypervisor {
             config,
             instances: RwLock::new(HashMap::new()),
             spawning: RwLock::new(std::collections::HashSet::new()),
+            waking: RwLock::new(HashMap::new()),
+            restart_history: RwLock::new(HashMap::new()),
             log_buffer,
             metrics: Metrics::new(),
             port_allocator,
@@ -304,6 +314,13 @@ impl Hypervisor {
 
         let runtime_type = handle.runtime_type();
         let now = Instant::now();
+
+        // Restore restart history from persistent storage (survives stop/spawn cycles)
+        let (restarts, restart_times) = {
+            let history = self.restart_history.read().await;
+            history.get(&instance_id).cloned().unwrap_or((0, Vec::new()))
+        };
+
         let instance = Instance {
             id: instance_id.clone(),
             handle,
@@ -311,11 +328,11 @@ impl Hypervisor {
             socket: socket.clone(),
             port,
             started_at: now,
-            restarts: 0,
+            restarts,
             consecutive_failures: 0,
             last_health_check: None,
             health_status: HealthStatus::Unknown,
-            restart_times: Vec::new(),
+            restart_times,
             last_activity: now,
             idle_timeout: process_config.idle_timeout,
             storage_quota_mb: process_config.storage_quota_mb,
@@ -338,6 +355,42 @@ impl Hypervisor {
 
         // Update metrics
         self.metrics.instances_up.inc();
+
+        // Spawn exit monitor: detects process exit within 1s instead of
+        // waiting for the next health check cycle (up to 10s).
+        if let Some(pid) = {
+            let instances = self.instances.read().await;
+            instances.get(&instance_id).and_then(|i| i.handle.pid())
+        } {
+            let exit_instance_id = instance_id.clone();
+            let log_buffer = self.log_buffer.clone();
+            let metrics = self.metrics.clone();
+            tokio::spawn(async move {
+                loop {
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+
+                    #[cfg(unix)]
+                    let alive = unsafe { libc::kill(pid as i32, 0) } == 0;
+                    #[cfg(not(unix))]
+                    let alive = true;
+
+                    if !alive {
+                        error!(
+                            "Instance {} (pid {}) exited unexpectedly",
+                            exit_instance_id, pid
+                        );
+                        log_buffer.push_stderr(
+                            &exit_instance_id.process,
+                            &exit_instance_id.id,
+                            format!("Process exited unexpectedly (pid {})", pid),
+                        ).await;
+                        // Health check loop will detect the dead process and restart it.
+                        // We just provide early detection and logging here.
+                        break;
+                    }
+                }
+            });
+        }
 
         // Wait for service to be ready
         if let Some(port) = port {
@@ -364,6 +417,26 @@ impl Hypervisor {
         }
 
         Ok(socket)
+    }
+
+    /// Stop all running instances. Called on graceful shutdown.
+    pub async fn stop_all(&self) {
+        let instance_ids: Vec<InstanceId> = {
+            let instances = self.instances.read().await;
+            instances.keys().cloned().collect()
+        };
+
+        if instance_ids.is_empty() {
+            return;
+        }
+
+        info!("Stopping {} instance(s) for shutdown", instance_ids.len());
+        for instance_id in instance_ids {
+            if let Err(e) = self.stop(&instance_id.process, &instance_id.id).await {
+                error!("Failed to stop {} during shutdown: {}", instance_id, e);
+            }
+        }
+        info!("All instances stopped");
     }
 
     /// Stop an instance
@@ -427,10 +500,10 @@ impl Hypervisor {
     pub async fn restart(&self, process_name: &str, id: &str) -> Result<PathBuf> {
         let instance_id = InstanceId::new(process_name, id);
 
-        // Get restart count before stopping
+        // Get restart count from persistent history (survives stop/spawn cycles)
         let restarts = {
-            let instances = self.instances.read().await;
-            instances.get(&instance_id).map(|i| i.restarts).unwrap_or(0)
+            let history = self.restart_history.read().await;
+            history.get(&instance_id).map(|(count, _)| *count).unwrap_or(0)
         };
 
         // Stop if running
@@ -449,15 +522,26 @@ impl Hypervisor {
         // Spawn again
         let socket = self.spawn(process_name, id).await?;
 
-        // Update restart count
+        // Update persistent restart history
+        let window = Duration::from_secs(self.config.settings.restart_window);
+        {
+            let mut history = self.restart_history.write().await;
+            let entry = history.entry(instance_id.clone()).or_insert((0, Vec::new()));
+            entry.0 = restarts + 1;
+            entry.1.push(Instant::now());
+            entry.1.retain(|t| t.elapsed() < window);
+        }
+
+        // Also update the instance's restart count for display
         {
             let mut instances = self.instances.write().await;
             if let Some(instance) = instances.get_mut(&instance_id) {
                 instance.restarts = restarts + 1;
-                instance.restart_times.push(Instant::now());
-                // Keep only recent restarts
-                let window = Duration::from_secs(self.config.settings.restart_window);
-                instance.restart_times.retain(|t| t.elapsed() < window);
+                // Copy restart_times from persistent history
+                let history = self.restart_history.read().await;
+                if let Some((_, times)) = history.get(&instance_id) {
+                    instance.restart_times = times.clone();
+                }
             }
         }
 
@@ -982,6 +1066,33 @@ impl Hypervisor {
     /// Returns the socket path. Use this for wake-on-request.
     /// Uses the process's configured startup_timeout (default: 10s).
     pub async fn spawn_and_wait(&self, process_name: &str, id: &str) -> Result<PathBuf> {
+        let instance_id = InstanceId::new(process_name, id);
+
+        // Wake-once pattern: if another request is already waking this instance,
+        // wait for it to finish instead of spawning a duplicate.
+        {
+            let waking = self.waking.read().await;
+            if let Some(notify) = waking.get(&instance_id) {
+                let notify = notify.clone();
+                drop(waking); // Release lock before waiting
+                info!("Instance {} is already being woken, waiting", instance_id);
+                notify.notified().await;
+                // Instance should be ready now. Touch activity and return.
+                if let Some(info) = self.get(process_name, id).await {
+                    self.touch_activity(process_name, id).await;
+                    return Ok(info.socket);
+                }
+                anyhow::bail!("Instance {} failed to wake", instance_id);
+            }
+        }
+
+        // We're the first to wake this instance. Register a Notify.
+        let notify = Arc::new(tokio::sync::Notify::new());
+        {
+            let mut waking = self.waking.write().await;
+            waking.insert(instance_id.clone(), notify.clone());
+        }
+
         // Get the startup timeout from process config
         let timeout_secs = self
             .config
@@ -989,21 +1100,56 @@ impl Hypervisor {
             .map(|p| p.startup_timeout)
             .unwrap_or(10);
 
+        // spawn_if_not_running already waits for TCP/socket readiness via spawn()
         let socket = self.spawn_if_not_running(process_name, id).await?;
 
-        // Wait for socket to be ready (check every 100ms)
+        // Get port info to determine readiness check method
+        let port = self
+            .get(process_name, id)
+            .await
+            .and_then(|info| info.port);
+
+        // Wait for service to be ready (check every 100ms)
+        // Try TCP first if port is available, fall back to socket existence
         let iterations = (timeout_secs * 10) as usize;
+        let mut ready = false;
         for _ in 0..iterations {
-            if socket.exists() {
-                // Also touch activity since this is a real request
+            let is_ready = if let Some(port) = port {
+                // TCP mode: try to connect
+                if tokio::net::TcpStream::connect(format!("127.0.0.1:{}", port))
+                    .await
+                    .is_ok()
+                {
+                    true
+                } else {
+                    // Fall back to socket existence check (test stubs may not listen on TCP)
+                    socket.exists()
+                }
+            } else {
+                socket.exists()
+            };
+
+            if is_ready {
                 self.touch_activity(process_name, id).await;
-                return Ok(socket);
+                ready = true;
+                break;
             }
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
 
-        anyhow::bail!("Instance {} failed to start within {} seconds",
-            InstanceId::new(process_name, id), timeout_secs)
+        // Notify all waiters and remove the Notify
+        notify.notify_waiters();
+        {
+            let mut waking = self.waking.write().await;
+            waking.remove(&instance_id);
+        }
+
+        if ready {
+            Ok(socket)
+        } else {
+            anyhow::bail!("Instance {} failed to start within {} seconds",
+                instance_id, timeout_secs)
+        }
     }
 
     /// Deploy a new instance version and wait for it to be healthy.
