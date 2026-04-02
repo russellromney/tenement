@@ -57,6 +57,9 @@ pub struct AppState {
     pub client: Client<hyper_util::client::legacy::connect::HttpConnector, Body>,
     pub config_store: Arc<ConfigStore>,
     pub tls_status: TlsStatus,
+    /// Tracks failed auth attempts for rate limiting.
+    /// Stores (failure_count, last_failure_time). Resets after cooldown.
+    pub auth_failures: Arc<tokio::sync::RwLock<(u32, Option<std::time::Instant>)>>,
 }
 
 /// Create the router (exposed for testing)
@@ -90,6 +93,18 @@ pub fn create_router(state: AppState) -> Router {
         .layer(middleware::from_fn_with_state(state.clone(), subdomain_middleware))
         .layer(TraceLayer::new_for_http())
         .with_state(state)
+}
+
+/// Constant-time byte comparison to prevent timing attacks on token verification
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut result = 0u8;
+    for (x, y) in a.iter().zip(b.iter()) {
+        result |= x ^ y;
+    }
+    result == 0
 }
 
 /// Subdomain routing middleware - intercepts subdomain requests before routes match
@@ -155,12 +170,36 @@ async fn auth_middleware(
         }
     };
 
-    // Verify token using TokenStore
+    // Rate limit: reject immediately if too many recent failures (prevents Argon2 DoS)
+    {
+        let failures = state.auth_failures.read().await;
+        let (count, last_time) = &*failures;
+        if *count >= 10 {
+            if let Some(last) = last_time {
+                // Cool down for 5 seconds after 10 consecutive failures
+                if last.elapsed() < std::time::Duration::from_secs(5) {
+                    tracing::debug!("Auth rate limited ({} recent failures)", count);
+                    return Err(StatusCode::TOO_MANY_REQUESTS);
+                }
+            }
+        }
+    }
+
+    // Verify token via Argon2
     let token_store = TokenStore::new(&state.config_store);
     match token_store.verify(token).await {
-        Ok(true) => Ok(next.run(req).await),
+        Ok(true) => {
+            // Reset failure counter on success
+            let mut failures = state.auth_failures.write().await;
+            *failures = (0, None);
+            Ok(next.run(req).await)
+        }
         Ok(false) => {
-            tracing::debug!("Invalid token provided");
+            // Track failure for rate limiting
+            let mut failures = state.auth_failures.write().await;
+            failures.0 += 1;
+            failures.1 = Some(std::time::Instant::now());
+            tracing::debug!("Invalid token (failure #{})", failures.0);
             Err(StatusCode::UNAUTHORIZED)
         }
         Err(e) => {
@@ -212,6 +251,7 @@ pub async fn serve(
         client,
         config_store,
         tls_status,
+        auth_failures: Arc::new(tokio::sync::RwLock::new((0, None))),
     };
 
     match tls_options {
@@ -699,11 +739,8 @@ async fn proxy_to_instance(
 ) -> Response {
     // Check if process is configured first
     if !state.hypervisor.has_process(process) {
-        return (
-            StatusCode::NOT_FOUND,
-            format!("Process '{}' not configured", process),
-        )
-            .into_response();
+        tracing::debug!("Subdomain request for unconfigured process: {}", process);
+        return (StatusCode::NOT_FOUND, "Not found").into_response();
     }
 
     let target = match id {
@@ -731,7 +768,7 @@ async fn proxy_to_instance(
                             tracing::error!("Failed to wake instance {}:{}: {}", process, instance_id, e);
                             return (
                                 StatusCode::SERVICE_UNAVAILABLE,
-                                format!("Failed to start instance: {}", e),
+                                "Service temporarily unavailable",
                             )
                                 .into_response();
                         }
@@ -752,9 +789,10 @@ async fn proxy_to_instance(
                 }
                 None => {
                     // No instances available - return 503
+                    tracing::debug!("No instances available for process '{}'", process);
                     return (
                         StatusCode::SERVICE_UNAVAILABLE,
-                        format!("No instances available for process '{}'", process),
+                        "Service temporarily unavailable",
                     )
                         .into_response();
                 }
@@ -800,7 +838,7 @@ async fn proxy_to_unix_socket(socket_path: &Path, req: Request<Body>) -> Respons
             tracing::error!("Failed to build proxy request: {}", e);
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Failed to build proxy request: {}", e),
+                "Internal server error".to_string(),
             )
                 .into_response();
         }
@@ -817,7 +855,7 @@ async fn proxy_to_unix_socket(socket_path: &Path, req: Request<Body>) -> Respons
             tracing::error!("Proxy error to {}: {}", socket_path.display(), e);
             (
                 StatusCode::BAD_GATEWAY,
-                format!("Proxy error: {}", e),
+                "Bad gateway".to_string(),
             )
                 .into_response()
         }
@@ -854,7 +892,7 @@ async fn proxy_to_tcp(
             tracing::error!("Failed to build proxy request: {}", e);
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Failed to build proxy request: {}", e),
+                "Internal server error".to_string(),
             )
                 .into_response();
         }
@@ -871,7 +909,7 @@ async fn proxy_to_tcp(
             tracing::error!("Proxy error to {}: {}", addr, e);
             (
                 StatusCode::BAD_GATEWAY,
-                format!("Proxy error: {}", e),
+                "Bad gateway".to_string(),
             )
                 .into_response()
         }
@@ -951,6 +989,7 @@ mod tests {
             client,
             config_store,
             tls_status: TlsStatus::default(),
+            auth_failures: Arc::new(tokio::sync::RwLock::new((0, None))),
         };
         (state, token, dir)
     }
@@ -1008,7 +1047,8 @@ mod tests {
             .await;
 
         response.assert_status_not_found();
-        response.assert_text_contains("not configured");
+        // Error message is sanitized (no internal details for unauthenticated users)
+        response.assert_text_contains("Not found");
     }
 
     #[tokio::test]

@@ -25,6 +25,9 @@ const HEALTH_CHECK_TIMEOUT: Duration = Duration::from_secs(5);
 pub struct Hypervisor {
     config: Config,
     instances: RwLock<HashMap<InstanceId, Instance>>,
+    /// Guard against concurrent spawns of the same instance.
+    /// An instance ID is added before spawn begins and removed after it completes.
+    spawning: RwLock<std::collections::HashSet<InstanceId>>,
     log_buffer: Arc<LogBuffer>,
     metrics: Arc<Metrics>,
     /// Port allocator for TCP ports (30000-40000)
@@ -50,6 +53,7 @@ impl Hypervisor {
         Arc::new(Self {
             config,
             instances: RwLock::new(HashMap::new()),
+            spawning: RwLock::new(std::collections::HashSet::new()),
             log_buffer: LogBuffer::new(),
             metrics: Metrics::new(),
             port_allocator,
@@ -70,6 +74,7 @@ impl Hypervisor {
         Arc::new(Self {
             config,
             instances: RwLock::new(HashMap::new()),
+            spawning: RwLock::new(std::collections::HashSet::new()),
             log_buffer,
             metrics: Metrics::new(),
             port_allocator,
@@ -130,14 +135,26 @@ impl Hypervisor {
                 .with_context(|| format!("Failed to create socket dir: {:?}", socket_parent))?;
         }
 
-        // Check if already running
+        // Check if already running or currently being spawned (prevents race condition)
         {
             let instances = self.instances.read().await;
             if instances.contains_key(&instance_id) {
                 info!("Instance {} already running", instance_id);
                 return Ok(socket);
             }
+            let spawning = self.spawning.read().await;
+            if spawning.contains(&instance_id) {
+                info!("Instance {} is already being spawned", instance_id);
+                return Ok(socket);
+            }
         }
+        // Mark as spawning (prevents concurrent spawn of same instance)
+        {
+            let mut spawning = self.spawning.write().await;
+            spawning.insert(instance_id.clone());
+        }
+
+        let data_dir = &self.config.settings.data_dir;
 
         // Validate isolation level is available - fail loudly if not
         let isolation = process_config.isolation;
@@ -317,6 +334,12 @@ impl Hypervisor {
             instances.insert(instance_id.clone(), instance);
         }
 
+        // Remove from spawning set now that instance is registered
+        {
+            let mut spawning = self.spawning.write().await;
+            spawning.remove(&instance_id);
+        }
+
         // Update metrics
         self.metrics.instances_up.inc();
 
@@ -350,6 +373,12 @@ impl Hypervisor {
     /// Stop an instance
     pub async fn stop(&self, process_name: &str, id: &str) -> Result<()> {
         let instance_id = InstanceId::new(process_name, id);
+
+        // Clear spawning guard if present (in case spawn failed and left it)
+        {
+            let mut spawning = self.spawning.write().await;
+            spawning.remove(&instance_id);
+        }
 
         let mut instances = self.instances.write().await;
 

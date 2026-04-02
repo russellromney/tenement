@@ -31,6 +31,7 @@ async fn setup_test_server() -> (TestServer, String, Arc<ConfigStore>, TempDir) 
         client,
         config_store: config_store.clone(),
         tls_status: TlsStatus::default(),
+        auth_failures: std::sync::Arc::new(tokio::sync::RwLock::new((0, None))),
     };
 
     let app = create_router(state);
@@ -783,6 +784,7 @@ async fn test_no_token_configured() {
         client,
         config_store,
         tls_status: TlsStatus::default(),
+        auth_failures: std::sync::Arc::new(tokio::sync::RwLock::new((0, None))),
     };
 
     let app = create_router(state);

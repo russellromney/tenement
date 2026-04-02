@@ -136,6 +136,7 @@ async fn setup_with_process(
         client,
         config_store,
         tls_status: TlsStatus::default(),
+        auth_failures: std::sync::Arc::new(tokio::sync::RwLock::new((0, None))),
     };
 
     let app = create_router(state);
@@ -665,7 +666,8 @@ async fn test_subdomain_unconfigured_process_returns_404() {
         .await;
 
     response.assert_status_not_found();
-    response.assert_text_contains("not configured");
+    // Error message is sanitized for unauthenticated users (Phase Break Stuff)
+    response.assert_text_contains("Not found");
 }
 
 /// Test that subdomain request for configured process with no instances returns 503
@@ -682,7 +684,8 @@ async fn test_subdomain_no_instances_returns_503() {
         .await;
 
     response.assert_status(axum::http::StatusCode::SERVICE_UNAVAILABLE);
-    response.assert_text_contains("No instances available");
+    // Error message is sanitized for unauthenticated users (Phase Break Stuff)
+    response.assert_text_contains("Service temporarily unavailable");
 }
 
 /// Test that root domain serves dashboard, not subdomain routing
