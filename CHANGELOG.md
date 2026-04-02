@@ -2,6 +2,21 @@
 
 ## v0.2.0
 
+### Phase Nookie (Multi-Tenant Demo)
+- Per-tenant notes API example (Python + SQLite) with demo script
+- README rewrite: quick start, value proposition, deployment guide
+
+### Phase Full Nelson (Operational Hardening)
+- Per-service request timeout (default 30s, returns 504 on hung tenant)
+- Pooled Unix socket client (shared in AppState, not created per request)
+- Connection draining: stop() waits up to 5s for active connections
+- Connection-aware idle timeout: skip reaping instances with active connections
+
+### Phase Behind Blue Eyes (Auth & Observability)
+- TenantTokenStore: per-tenant token generation, verification, revocation
+- DeployLogStore: audit log for all spawn/stop/deploy/route actions
+- API routes log all mutations with timestamp, action, details, success
+
 ### Phase Re-Arranged (State & Persistence)
 - Persistent instance state: SQLite table records pid/port/started_at per instance for crash recovery
 - Orphan recovery on startup: kills still-running processes from previous crashes

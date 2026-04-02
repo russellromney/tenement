@@ -12,69 +12,23 @@ See [CHANGELOG.md](CHANGELOG.md) for completed work.
 - Revisit when the single-server story is more mature
 
 
-## Phase Nookie -- Multi-Tenant Demo & Getting Started
-> After: Phase Re-Arranged · Before: Phase Full Nelson
+## Remaining Work
 
-Prove the value proposition with a real demo that shows why tenement exists.
-
-### a. Killer multi-tenant example
-- 30-line Python app: reads `PORT`, serves a simple API backed by SQLite in `{data_dir}`
-- `tenement.toml` with `idle_timeout = 300`, `storage_persist = true`
-- Script that creates 10 tenants, shows them all running, idles them, wakes one
-- Show: 10 tenants on one box, 20MB total, sub-second wake from idle
-
-### b. Getting started guide
-- README quick start that goes from zero to multi-tenant in under 2 minutes
-- Cover the actual value prop, not just "here's how to spawn a process"
-- Show the subdomain routing, idle timeout, wake-on-request flow
-
-### c. Deployment guide
-- Single Hetzner VPS setup with Caddy + tenement
-- DNS wildcard setup for `*.app.example.com`
-- systemd service with proper resource limits
-
-## Phase Full Nelson -- Operational Hardening
-> After: Phase Nookie · Before: Phase Behind Blue Eyes
-
-### a. Request timeout on proxy
-- No timeout on reverse proxy; a hung tenant holds the connection forever
-- Add configurable per-service `request_timeout` (default 30s)
-
-### b. Unix socket client pooling
-- `proxy_to_unix_socket` creates a new `Client<UnixConnector>` per request
-- Share a pooled client like the TCP proxy does
-
-### c. Connection draining on stop
-- When an instance is stopped (manually or via idle timeout), active connections are severed immediately
-- Add a brief drain period: reject new requests, allow in-flight to complete (configurable, default 5s)
-
-### d. Connection-aware idle timeout
-- Currently tracks "last request" via `touch()`, but no tracking of active connections
-- An instance could be reaped while serving a long WebSocket or download
-- Track active connection count; don't reap while connections > 0
-
-### e. File splits
-- `hypervisor.rs` and `server.rs` are both approaching 1000 lines
+### File splits (deferred from Phase Full Nelson)
+- `hypervisor.rs` at 2730 lines (1400 code + 1300 tests)
 - Split hypervisor into: lifecycle, health, routing, deploy
 - Split server into: routes, middleware, proxy
 
-## Phase Behind Blue Eyes -- Multi-Tenant Auth & Observability
-> After: Phase Full Nelson · Before: (none)
+### Tenant token middleware wiring
+- TenantTokenStore data layer is built
+- Auth middleware needs to try tenant tokens after admin token
+- Pass tenant_id to handlers for scoped filtering
 
-### a. Per-tenant API tokens
-- Currently one token for the entire system
-- No scoped access, no token rotation without downtime
-- Add per-tenant tokens with scoped access to their own logs/metrics/instances
-
-### b. Deployment history/audit log
-- Track: who, what, when, success/fail in SQLite
-- Rollback needs to know "previous version"
-
-### c. OpenTelemetry integration
+### OpenTelemetry integration
 - Distributed tracing
 - Alert webhooks
 
-### d. Service discovery
+### Service discovery
 - DNS-based service discovery between tenant processes
 
 ## Design Principles
