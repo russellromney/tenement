@@ -12,6 +12,14 @@
 - Connection draining: stop() waits up to 5s for active connections
 - Connection-aware idle timeout: skip reaping instances with active connections
 
+### Tenant Token Middleware Wiring
+- Auth middleware: tries admin token first, then tenant tokens
+- Admin token: full access to all endpoints
+- Tenant token: scoped to own instances and logs (FORBIDDEN for deploy/route)
+- `ten token-gen --tenant alice` generates scoped tokens
+- Token prefix indexed for O(1) lookup
+- 6 new tests for auth scoping and isolation
+
 ### Phase Behind Blue Eyes (Auth & Observability)
 - TenantTokenStore: per-tenant token generation, verification, revocation
 - DeployLogStore: audit log for all spawn/stop/deploy/route actions

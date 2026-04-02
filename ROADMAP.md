@@ -19,11 +19,6 @@ See [CHANGELOG.md](CHANGELOG.md) for completed work.
 - Split hypervisor into: lifecycle, health, routing, deploy
 - Split server into: routes, middleware, proxy
 
-### Tenant token middleware wiring
-- TenantTokenStore data layer is built
-- Auth middleware needs to try tenant tokens after admin token
-- Pass tenant_id to handlers for scoped filtering
-
 ### OpenTelemetry integration
 - Distributed tracing
 - Alert webhooks
