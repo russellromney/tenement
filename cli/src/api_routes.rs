@@ -127,6 +127,9 @@ pub async fn post_spawn(
         .await
         .and_then(|info| info.port);
 
+    // Audit log
+    let _ = state.deploy_log.log("spawn", &req.process, &req.id, None, true).await;
+
     Ok(Json(SpawnResponse {
         instance: format!("{}:{}", req.process, req.id),
         socket: socket.display().to_string(),
@@ -152,6 +155,9 @@ pub async fn delete_instance(
                 Json(ApiError::new(e.to_string())),
             )
         })?;
+
+    // Audit log
+    let _ = state.deploy_log.log("stop", &process, &instance_id, None, true).await;
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -253,6 +259,15 @@ pub async fn post_deploy(
             )
         })?;
 
+    // Audit log
+    let _ = state.deploy_log.log(
+        "deploy",
+        &req.process,
+        &req.version,
+        Some(&format!("weight={}", req.weight)),
+        true,
+    ).await;
+
     Ok(Json(DeployResponse {
         instance: format!("{}:{}", req.process, req.version),
         socket: socket.display().to_string(),
@@ -283,6 +298,15 @@ pub async fn post_route(
                 Json(ApiError::new(e.to_string())),
             )
         })?;
+
+    // Audit log
+    let _ = state.deploy_log.log(
+        "route",
+        &req.process,
+        &format!("{} -> {}", req.from, req.to),
+        Some("weight swap: 0/100"),
+        true,
+    ).await;
 
     Ok(Json(RouteResponse {
         from_instance: format!("{}:{}", req.process, req.from),

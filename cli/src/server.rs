@@ -57,6 +57,7 @@ pub struct AppState {
     pub client: Client<hyper_util::client::legacy::connect::HttpConnector, Body>,
     pub unix_client: Client<UnixConnector, Body>,
     pub config_store: Arc<ConfigStore>,
+    pub deploy_log: Arc<tenement::DeployLogStore>,
     pub tls_status: TlsStatus,
     /// Tracks failed auth attempts for rate limiting.
     /// Stores (failure_count, last_failure_time). Resets after cooldown.
@@ -247,6 +248,7 @@ pub async fn serve(
     domain: String,
     port: u16,
     config_store: Arc<ConfigStore>,
+    deploy_log: Arc<tenement::DeployLogStore>,
     tls_options: Option<TlsOptions>,
 ) -> Result<()> {
     // Recover any orphaned instances from a previous crash
@@ -287,6 +289,7 @@ pub async fn serve(
         client,
         unix_client,
         config_store,
+        deploy_log,
         tls_status,
         auth_failures: Arc::new(tokio::sync::RwLock::new((0, None))),
     };
@@ -1050,7 +1053,8 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let db_path = dir.path().join("test.db");
         let pool = init_db(&db_path).await.unwrap();
-        let config_store = Arc::new(ConfigStore::new(pool));
+        let config_store = Arc::new(ConfigStore::new(pool.clone()));
+        let deploy_log = Arc::new(tenement::DeployLogStore::new(pool));
 
         // Generate and store a test token
         let token_store = TokenStore::new(&config_store);
@@ -1066,6 +1070,7 @@ mod tests {
             client,
             unix_client,
             config_store,
+            deploy_log,
             tls_status: TlsStatus::default(),
             auth_failures: Arc::new(tokio::sync::RwLock::new((0, None))),
         };

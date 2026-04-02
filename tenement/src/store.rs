@@ -122,8 +122,203 @@ pub async fn init_db(path: &Path) -> Result<DbPool> {
     .await
     .context("Failed to create instance_state table")?;
 
+    // Create tenant tokens table (per-tenant API access)
+    sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS tenant_tokens (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            token_hash TEXT NOT NULL,
+            tenant_id TEXT NOT NULL,
+            description TEXT,
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_tenant_tokens_tenant ON tenant_tokens(tenant_id);
+        "#,
+    )
+    .execute(&pool)
+    .await
+    .context("Failed to create tenant_tokens table")?;
+
+    // Create deployment audit log table
+    sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS deploy_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp TEXT NOT NULL,
+            action TEXT NOT NULL,
+            process TEXT NOT NULL,
+            instance_id TEXT NOT NULL,
+            details TEXT,
+            success INTEGER NOT NULL DEFAULT 1
+        );
+        CREATE INDEX IF NOT EXISTS idx_deploy_log_timestamp ON deploy_log(timestamp DESC);
+        "#,
+    )
+    .execute(&pool)
+    .await
+    .context("Failed to create deploy_log table")?;
+
     info!("Database initialized at {:?}", path);
     Ok(pool)
+}
+
+/// Tenant token with scoped access
+#[derive(Debug, Clone)]
+pub struct TenantToken {
+    pub id: i64,
+    pub tenant_id: String,
+    pub description: Option<String>,
+    pub created_at: String,
+}
+
+/// Store for tenant-scoped API tokens
+pub struct TenantTokenStore {
+    pool: DbPool,
+}
+
+impl TenantTokenStore {
+    pub fn new(pool: DbPool) -> Self {
+        Self { pool }
+    }
+
+    /// Generate and store a tenant token. Returns the plaintext token.
+    pub fn generate_and_store(
+        &self,
+        tenant_id: &str,
+        description: Option<&str>,
+    ) -> impl std::future::Future<Output = Result<String>> + '_ {
+        let tenant_id = tenant_id.to_string();
+        let description = description.map(|s| s.to_string());
+        async move {
+            let token = crate::auth::generate_token();
+            let hash = crate::auth::hash_token(&token)?;
+            let now = chrono::Utc::now().to_rfc3339();
+            sqlx::query(
+                "INSERT INTO tenant_tokens (token_hash, tenant_id, description, created_at) VALUES (?, ?, ?, ?)",
+            )
+            .bind(&hash)
+            .bind(&tenant_id)
+            .bind(&description)
+            .bind(&now)
+            .execute(&self.pool)
+            .await?;
+            Ok(token)
+        }
+    }
+
+    /// Verify a token and return the tenant_id if valid
+    pub async fn verify(&self, token: &str) -> Result<Option<String>> {
+        let rows = sqlx::query("SELECT token_hash, tenant_id FROM tenant_tokens")
+            .fetch_all(&self.pool)
+            .await?;
+
+        for row in rows {
+            let hash: String = row.get("token_hash");
+            if crate::auth::verify_token(token, &hash) {
+                return Ok(Some(row.get("tenant_id")));
+            }
+        }
+        Ok(None)
+    }
+
+    /// List all tokens for a tenant
+    pub async fn list(&self, tenant_id: &str) -> Result<Vec<TenantToken>> {
+        let rows = sqlx::query(
+            "SELECT id, tenant_id, description, created_at FROM tenant_tokens WHERE tenant_id = ? ORDER BY created_at DESC",
+        )
+        .bind(tenant_id)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows
+            .into_iter()
+            .map(|row| TenantToken {
+                id: row.get("id"),
+                tenant_id: row.get("tenant_id"),
+                description: row.get("description"),
+                created_at: row.get("created_at"),
+            })
+            .collect())
+    }
+
+    /// Revoke a specific token by ID
+    pub async fn revoke(&self, token_id: i64) -> Result<bool> {
+        let result = sqlx::query("DELETE FROM tenant_tokens WHERE id = ?")
+            .bind(token_id)
+            .execute(&self.pool)
+            .await?;
+        Ok(result.rows_affected() > 0)
+    }
+}
+
+/// Deployment audit log entry
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct DeployLogEntry {
+    pub id: i64,
+    pub timestamp: String,
+    pub action: String,
+    pub process: String,
+    pub instance_id: String,
+    pub details: Option<String>,
+    pub success: bool,
+}
+
+/// Store for deployment audit log
+pub struct DeployLogStore {
+    pool: DbPool,
+}
+
+impl DeployLogStore {
+    pub fn new(pool: DbPool) -> Self {
+        Self { pool }
+    }
+
+    /// Log a deployment action
+    pub async fn log(
+        &self,
+        action: &str,
+        process: &str,
+        instance_id: &str,
+        details: Option<&str>,
+        success: bool,
+    ) -> Result<()> {
+        let now = chrono::Utc::now().to_rfc3339();
+        sqlx::query(
+            "INSERT INTO deploy_log (timestamp, action, process, instance_id, details, success) VALUES (?, ?, ?, ?, ?, ?)",
+        )
+        .bind(&now)
+        .bind(action)
+        .bind(process)
+        .bind(instance_id)
+        .bind(details)
+        .bind(success as i64)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Query recent deploy log entries
+    pub async fn recent(&self, limit: usize) -> Result<Vec<DeployLogEntry>> {
+        let rows = sqlx::query(
+            "SELECT id, timestamp, action, process, instance_id, details, success FROM deploy_log ORDER BY timestamp DESC LIMIT ?",
+        )
+        .bind(limit as i64)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows
+            .into_iter()
+            .map(|row| DeployLogEntry {
+                id: row.get("id"),
+                timestamp: row.get("timestamp"),
+                action: row.get("action"),
+                process: row.get("process"),
+                instance_id: row.get("instance_id"),
+                details: row.get("details"),
+                success: row.get::<i64, _>("success") != 0,
+            })
+            .collect())
+    }
 }
 
 /// Log store with batch flushing
