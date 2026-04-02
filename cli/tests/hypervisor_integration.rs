@@ -85,6 +85,7 @@ fn test_config_with_process(name: &str, command: &str, args: Vec<&str>) -> Confi
         restart: "on-failure".to_string(),
         idle_timeout: None,
         startup_timeout: 5,
+        request_timeout: 30,
         memory_limit_mb: None,
         cpu_shares: None,
         kernel: None,
@@ -130,10 +131,12 @@ async fn setup_with_process(
     let config = test_config_with_process(process_name, script_path.to_str().unwrap(), vec![]);
     let hypervisor = Hypervisor::new(config);
     let client = Client::builder(TokioExecutor::new()).build_http();
+    let unix_client = Client::builder(TokioExecutor::new()).build(hyperlocal::UnixConnector);
     let state = AppState {
         hypervisor: hypervisor.clone(),
         domain: "example.com".to_string(),
         client,
+        unix_client,
         config_store,
         tls_status: TlsStatus::default(),
         auth_failures: std::sync::Arc::new(tokio::sync::RwLock::new((0, None))),
@@ -620,6 +623,7 @@ async fn test_spawn_bad_command_fails() {
         restart: "on-failure".to_string(),
         idle_timeout: None,
         startup_timeout: 5,
+        request_timeout: 30,
         memory_limit_mb: None,
         cpu_shares: None,
         kernel: None,

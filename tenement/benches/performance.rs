@@ -27,6 +27,7 @@ fn test_config_with_process(name: &str, command: &str) -> Config {
         restart: "on-failure".to_string(),
         idle_timeout: None,
         startup_timeout: 5,
+        request_timeout: 30,
         memory_limit_mb: None,
         cpu_shares: None,
         kernel: None,

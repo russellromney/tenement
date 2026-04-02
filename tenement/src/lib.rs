@@ -18,7 +18,7 @@ pub mod store;
 pub use auth::{generate_token, hash_token, verify_token, TokenStore};
 pub use cgroup::{CgroupManager, ResourceLimits};
 pub use config::{Config, TlsConfig};
-pub use hypervisor::Hypervisor;
+pub use hypervisor::{ConnectionGuard, Hypervisor};
 pub use instance::{Instance, InstanceId, InstanceStatus};
 pub use logs::{LogBuffer, LogEntry, LogLevel, LogQuery};
 pub use metrics::Metrics;

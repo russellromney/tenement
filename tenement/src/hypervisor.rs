@@ -21,6 +21,17 @@ use tracing::{error, info, warn};
 
 const HEALTH_CHECK_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// RAII guard that decrements the active connection count when dropped.
+pub struct ConnectionGuard {
+    counter: Arc<std::sync::atomic::AtomicU32>,
+}
+
+impl Drop for ConnectionGuard {
+    fn drop(&mut self) {
+        self.counter.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
 /// The hypervisor manages all running instances
 pub struct Hypervisor {
     config: Config,
@@ -31,6 +42,8 @@ pub struct Hypervisor {
     /// Wake-once notifications: when an instance is being woken, other requests
     /// wait on the Notify instead of spawning duplicate processes.
     waking: RwLock<HashMap<InstanceId, Arc<tokio::sync::Notify>>>,
+    /// Active connection count per instance (for connection-aware idle timeout and draining)
+    active_connections: RwLock<HashMap<InstanceId, Arc<std::sync::atomic::AtomicU32>>>,
     /// Restart history that persists across stop/spawn cycles.
     /// Maps instance ID to (restart_count, restart_times).
     restart_history: RwLock<HashMap<InstanceId, (u32, Vec<Instant>)>>,
@@ -63,6 +76,7 @@ impl Hypervisor {
             instances: RwLock::new(HashMap::new()),
             spawning: RwLock::new(std::collections::HashSet::new()),
             waking: RwLock::new(HashMap::new()),
+            active_connections: RwLock::new(HashMap::new()),
             restart_history: RwLock::new(HashMap::new()),
             log_buffer: LogBuffer::new(),
             metrics: Metrics::new(),
@@ -87,6 +101,7 @@ impl Hypervisor {
             instances: RwLock::new(HashMap::new()),
             spawning: RwLock::new(std::collections::HashSet::new()),
             waking: RwLock::new(HashMap::new()),
+            active_connections: RwLock::new(HashMap::new()),
             restart_history: RwLock::new(HashMap::new()),
             log_buffer,
             metrics: Metrics::new(),
@@ -494,7 +509,7 @@ impl Hypervisor {
         info!("All instances stopped");
     }
 
-    /// Stop an instance
+    /// Stop an instance. Waits up to 5 seconds for active connections to drain.
     pub async fn stop(&self, process_name: &str, id: &str) -> Result<()> {
         let instance_id = InstanceId::new(process_name, id);
 
@@ -502,6 +517,28 @@ impl Hypervisor {
         {
             let mut spawning = self.spawning.write().await;
             spawning.remove(&instance_id);
+        }
+
+        // Wait for active connections to drain (up to 5 seconds)
+        let active = self.active_connection_count(process_name, id).await;
+        if active > 0 {
+            info!(
+                "Instance {} has {} active connection(s), draining...",
+                instance_id, active
+            );
+            for _ in 0..50 {
+                if self.active_connection_count(process_name, id).await == 0 {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+            let remaining = self.active_connection_count(process_name, id).await;
+            if remaining > 0 {
+                warn!(
+                    "Instance {} still has {} connection(s) after drain timeout, force stopping",
+                    instance_id, remaining
+                );
+            }
         }
 
         let mut instances = self.instances.write().await;
@@ -705,6 +742,41 @@ impl Hypervisor {
     /// Check if a process is configured (can be spawned)
     pub fn has_process(&self, process_name: &str) -> bool {
         self.config.get_service(process_name).is_some()
+    }
+
+    /// Increment active connection count for an instance. Returns a guard
+    /// that decrements the count when dropped.
+    pub async fn connection_start(&self, process_name: &str, id: &str) -> ConnectionGuard {
+        let instance_id = InstanceId::new(process_name, id);
+        let counter = {
+            let mut conns = self.active_connections.write().await;
+            conns
+                .entry(instance_id)
+                .or_insert_with(|| Arc::new(std::sync::atomic::AtomicU32::new(0)))
+                .clone()
+        };
+        counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        ConnectionGuard { counter }
+    }
+
+    /// Get active connection count for an instance
+    pub async fn active_connection_count(&self, process_name: &str, id: &str) -> u32 {
+        let instance_id = InstanceId::new(process_name, id);
+        let conns = self.active_connections.read().await;
+        conns
+            .get(&instance_id)
+            .map(|c| c.load(std::sync::atomic::Ordering::Relaxed))
+            .unwrap_or(0)
+    }
+
+    /// Get the request timeout for a process (in seconds)
+    pub fn request_timeout(&self, process_name: &str) -> Duration {
+        let secs = self
+            .config
+            .get_service(process_name)
+            .map(|p| p.request_timeout)
+            .unwrap_or(30);
+        Duration::from_secs(secs)
     }
 
     /// Check health of an instance
@@ -987,6 +1059,18 @@ impl Hypervisor {
         };
 
         for instance_id in idle_instances {
+            // Don't reap instances with active connections
+            let active = self
+                .active_connection_count(&instance_id.process, &instance_id.id)
+                .await;
+            if active > 0 {
+                info!(
+                    "Instance {} is idle but has {} active connection(s), skipping reap",
+                    instance_id, active
+                );
+                continue;
+            }
+
             let idle_secs = {
                 let instances = self.instances.read().await;
                 instances
@@ -1401,6 +1485,7 @@ mod tests {
             restart: "on-failure".to_string(),
             idle_timeout: None,
             startup_timeout: 5,
+            request_timeout: 30,
             memory_limit_mb: None,
             cpu_shares: None,
             kernel: None,
@@ -2172,6 +2257,7 @@ sleep 30
                 restart: "on-failure".to_string(),
                 idle_timeout: None,
                 startup_timeout: 5,
+            request_timeout: 30,
                 memory_limit_mb: None,
                 cpu_shares: None,
                 kernel: None,

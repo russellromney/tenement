@@ -204,6 +204,11 @@ pub struct ProcessConfig {
     #[serde(default = "default_startup_timeout")]
     pub startup_timeout: u64,
 
+    /// Request timeout in seconds (default: 30)
+    /// Maximum time a proxied request can take before being terminated.
+    #[serde(default = "default_request_timeout")]
+    pub request_timeout: u64,
+
     // --- Resource limits (cgroups v2 on Linux) ---
 
     /// Memory limit in MB (0 = unlimited)
@@ -281,6 +286,10 @@ fn default_storage_persist() -> bool {
 
 fn default_startup_timeout() -> u64 {
     10
+}
+
+fn default_request_timeout() -> u64 {
+    30
 }
 
 /// Routing configuration

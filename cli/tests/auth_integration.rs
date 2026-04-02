@@ -25,10 +25,12 @@ async fn setup_test_server() -> (TestServer, String, Arc<ConfigStore>, TempDir) 
     let config = Config::default();
     let hypervisor = Hypervisor::new(config);
     let client = Client::builder(TokioExecutor::new()).build_http();
+    let unix_client = Client::builder(TokioExecutor::new()).build(hyperlocal::UnixConnector);
     let state = AppState {
         hypervisor,
         domain: "example.com".to_string(),
         client,
+        unix_client,
         config_store: config_store.clone(),
         tls_status: TlsStatus::default(),
         auth_failures: std::sync::Arc::new(tokio::sync::RwLock::new((0, None))),
@@ -778,10 +780,12 @@ async fn test_no_token_configured() {
     let config = Config::default();
     let hypervisor = Hypervisor::new(config);
     let client = Client::builder(TokioExecutor::new()).build_http();
+    let unix_client = Client::builder(TokioExecutor::new()).build(hyperlocal::UnixConnector);
     let state = AppState {
         hypervisor,
         domain: "example.com".to_string(),
         client,
+        unix_client,
         config_store,
         tls_status: TlsStatus::default(),
         auth_failures: std::sync::Arc::new(tokio::sync::RwLock::new((0, None))),

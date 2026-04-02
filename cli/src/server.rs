@@ -55,6 +55,7 @@ pub struct AppState {
     pub hypervisor: Arc<Hypervisor>,
     pub domain: String,
     pub client: Client<hyper_util::client::legacy::connect::HttpConnector, Body>,
+    pub unix_client: Client<UnixConnector, Body>,
     pub config_store: Arc<ConfigStore>,
     pub tls_status: TlsStatus,
     /// Tracks failed auth attempts for rate limiting.
@@ -266,6 +267,7 @@ pub async fn serve(
     hypervisor.clone().start_monitor();
 
     let client = Client::builder(TokioExecutor::new()).build_http();
+    let unix_client = Client::builder(TokioExecutor::new()).build(UnixConnector);
 
     // Build TLS status from options
     let tls_status = match &tls_options {
@@ -283,6 +285,7 @@ pub async fn serve(
         hypervisor,
         domain: domain.clone(),
         client,
+        unix_client,
         config_store,
         tls_status,
         auth_failures: Arc::new(tokio::sync::RwLock::new((0, None))),
@@ -841,11 +844,28 @@ async fn proxy_to_instance(
         }
     };
 
-    // Proxy based on connection type
-    let response = if let Some(addr) = target.tcp_addr() {
-        proxy_to_tcp(&state.client, &addr, req).await
-    } else {
-        proxy_to_unix_socket(&target.socket, req).await
+    // Track active connection (decrements when guard is dropped)
+    let conn_instance = id.unwrap_or("weighted");
+    let _conn_guard = state.hypervisor.connection_start(process, conn_instance).await;
+
+    // Proxy with request timeout
+    let timeout = state.hypervisor.request_timeout(process);
+    let proxy_future: std::pin::Pin<Box<dyn std::future::Future<Output = Response> + Send>> =
+        if let Some(addr) = target.tcp_addr() {
+            let client = state.client.clone();
+            Box::pin(async move { proxy_to_tcp(&client, &addr, req).await })
+        } else {
+            let socket = target.socket.clone();
+            let unix_client = state.unix_client.clone();
+            Box::pin(async move { proxy_to_unix_socket(&unix_client, &socket, req).await })
+        };
+
+    let response = match tokio::time::timeout(timeout, proxy_future).await {
+        Ok(resp) => resp,
+        Err(_) => {
+            tracing::error!("Request timeout after {:?} for process {}", timeout, process);
+            (StatusCode::GATEWAY_TIMEOUT, "Gateway timeout").into_response()
+        }
     };
 
     // Record request metrics
@@ -863,11 +883,12 @@ async fn proxy_to_instance(
     response
 }
 
-/// Proxy an HTTP request to a Unix socket
-async fn proxy_to_unix_socket(socket_path: &Path, req: Request<Body>) -> Response {
-    // Create Unix socket client
-    let connector = UnixConnector;
-    let client: Client<UnixConnector, Body> = Client::builder(TokioExecutor::new()).build(connector);
+/// Proxy an HTTP request to a Unix socket (uses pooled client)
+async fn proxy_to_unix_socket(
+    client: &Client<UnixConnector, Body>,
+    socket_path: &Path,
+    req: Request<Body>,
+) -> Response {
 
     // Build URI for Unix socket - hyperlocal requires a special URI format
     let path_and_query = req
@@ -1038,10 +1059,12 @@ mod tests {
         let config = Config::default();
         let hypervisor = Hypervisor::new(config);
         let client = Client::builder(TokioExecutor::new()).build_http();
+        let unix_client = Client::builder(TokioExecutor::new()).build(UnixConnector);
         let state = AppState {
             hypervisor,
             domain: "example.com".to_string(),
             client,
+            unix_client,
             config_store,
             tls_status: TlsStatus::default(),
             auth_failures: Arc::new(tokio::sync::RwLock::new((0, None))),
