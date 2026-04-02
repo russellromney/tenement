@@ -274,18 +274,23 @@ impl Hypervisor {
         if resource_limits.has_limits() {
             // Create cgroup and add process. Fail loudly if resource limits are
             // configured but can't be applied (process would run unrestricted).
-            self.cgroup_manager
-                .create_cgroup(&instance_id.to_string(), &resource_limits)
-                .with_context(|| format!(
+            if let Err(e) = self.cgroup_manager.create_cgroup(&instance_id.to_string(), &resource_limits) {
+                // Kill the already-spawned child and clean up spawning guard
+                let _ = handle.kill().await;
+                self.spawning.write().await.remove(&instance_id);
+                return Err(e).with_context(|| format!(
                     "Failed to create cgroup for {}. Resource limits will not be enforced.", instance_id
-                ))?;
+                ));
+            }
 
             if let Some(pid) = handle.pid() {
-                self.cgroup_manager
-                    .add_process(&instance_id.to_string(), pid, &resource_limits)
-                    .with_context(|| format!(
+                if let Err(e) = self.cgroup_manager.add_process(&instance_id.to_string(), pid, &resource_limits) {
+                    let _ = handle.kill().await;
+                    self.spawning.write().await.remove(&instance_id);
+                    return Err(e).with_context(|| format!(
                         "Failed to add process to cgroup for {}. Resource limits will not be enforced.", instance_id
-                    ))?;
+                    ));
+                }
             }
         }
 
@@ -374,22 +379,24 @@ impl Hypervisor {
         // Update metrics
         self.metrics.instances_up.inc();
 
-        // Persist instance state for crash recovery
+        // Persist instance state for crash recovery (only if we have a PID to track)
         if let Some(ref store) = self.state_store {
             let pid = {
                 let instances = self.instances.read().await;
-                instances.get(&instance_id).and_then(|i| i.handle.pid()).unwrap_or(0)
+                instances.get(&instance_id).and_then(|i| i.handle.pid())
             };
-            let state = crate::store::InstanceState {
-                instance_id: instance_id.to_string(),
-                process_name: process_name.to_string(),
-                id: id.to_string(),
-                pid,
-                port,
-                started_at: chrono::Utc::now().to_rfc3339(),
-            };
-            if let Err(e) = store.save(&state).await {
-                error!("Failed to persist instance state for {}: {}", instance_id, e);
+            if let Some(pid) = pid {
+                let state = crate::store::InstanceState {
+                    instance_id: instance_id.to_string(),
+                    process_name: process_name.to_string(),
+                    id: id.to_string(),
+                    pid,
+                    port,
+                    started_at: chrono::Utc::now().to_rfc3339(),
+                };
+                if let Err(e) = store.save(&state).await {
+                    error!("Failed to persist instance state for {}: {}", instance_id, e);
+                }
             }
         }
 
@@ -1107,17 +1114,15 @@ impl Hypervisor {
                 unsafe {
                     libc::kill(state.pid as i32, libc::SIGKILL);
                 }
-
-                // Release the port if it was allocated
-                if let Some(port) = state.port {
-                    self.port_allocator.release(port).await;
-                }
             } else {
                 info!(
                     "Orphaned process {} (pid {}) already exited",
                     state.instance_id, state.pid
                 );
             }
+
+            // Note: port allocator is in-memory and starts fresh on each run,
+            // so no port release needed during recovery.
         }
 
         // Clear all persisted state
