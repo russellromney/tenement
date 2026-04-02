@@ -184,7 +184,7 @@ enum Commands {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    tracing_subscriber::fmt::init();
+    init_tracing();
 
     let cli = Cli::parse();
 
@@ -607,6 +607,47 @@ fn validate_acme_email(email: &str) -> Result<()> {
         );
     }
     Ok(())
+}
+
+/// Initialize tracing. If the `otlp` feature is enabled and OTEL_EXPORTER_OTLP_ENDPOINT
+/// is set, traces are exported via OTLP. Otherwise, logs to stderr.
+fn init_tracing() {
+    #[cfg(feature = "otlp")]
+    {
+        if std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT").is_ok() {
+            use opentelemetry::global;
+            use opentelemetry_sdk::trace::TracerProvider;
+            use tracing_subscriber::layer::SubscriberExt;
+            use tracing_subscriber::util::SubscriberInitExt;
+
+            let exporter = opentelemetry_otlp::new_exporter().tonic();
+            let provider = TracerProvider::builder()
+                .with_batch_exporter(
+                    opentelemetry_otlp::new_pipeline()
+                        .tracing()
+                        .with_exporter(exporter)
+                        .build_batch(opentelemetry_sdk::runtime::Tokio)
+                        .expect("failed to build OTLP pipeline"),
+                    opentelemetry_sdk::runtime::Tokio,
+                )
+                .build();
+            global::set_tracer_provider(provider.clone());
+
+            let telemetry = tracing_opentelemetry::layer()
+                .with_tracer(provider.tracer("tenement"));
+
+            tracing_subscriber::registry()
+                .with(tracing_subscriber::fmt::layer())
+                .with(telemetry)
+                .init();
+
+            tracing::info!("OpenTelemetry OTLP tracing enabled");
+            return;
+        }
+    }
+
+    // Default: log to stderr
+    tracing_subscriber::fmt::init();
 }
 
 fn format_uptime(secs: u64) -> String {

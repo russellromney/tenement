@@ -80,6 +80,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/", get(dashboard))
         .route("/health", get(health))
         .route("/metrics", get(metrics_endpoint))
+        .route("/api/telemetry", get(telemetry_endpoint))
         .route("/api/instances", get(list_instances))
         .route("/api/instances/spawn", axum::routing::post(crate::api_routes::post_spawn))
         .route("/api/instances/:id", axum::routing::delete(crate::api_routes::delete_instance))
@@ -191,7 +192,7 @@ async fn auth_middleware(
     let path = req.uri().path();
 
     // Skip auth for public endpoints
-    if path == "/health" || path == "/metrics" || path == "/" || path.starts_with("/assets/") {
+    if path == "/health" || path == "/metrics" || path == "/api/telemetry" || path == "/" || path.starts_with("/assets/") {
         return Ok(next.run(req).await);
     }
 
@@ -549,6 +550,58 @@ async fn metrics_endpoint(State(state): State<AppState>) -> impl IntoResponse {
     )
 }
 
+/// Telemetry endpoint - returns structured JSON metrics for the dashboard
+async fn telemetry_endpoint(State(state): State<AppState>) -> impl IntoResponse {
+    let metrics = state.hypervisor.metrics();
+    let instances = state.hypervisor.list().await;
+
+    // Build per-instance telemetry
+    let mut instance_telemetry = Vec::new();
+    for info in &instances {
+        let id_str = info.id.to_string();
+        let mut labels = std::collections::HashMap::new();
+        labels.insert("process".to_string(), info.id.process.clone());
+        labels.insert("instance".to_string(), info.id.id.clone());
+
+        let requests = metrics.requests_total.with_labels(&labels).await.get();
+        let duration = metrics.request_duration_ms.with_labels(&labels).await;
+
+        instance_telemetry.push(serde_json::json!({
+            "id": id_str,
+            "process": info.id.process,
+            "instance": info.id.id,
+            "health": info.health.to_string(),
+            "uptime_secs": info.uptime_secs,
+            "idle_secs": info.idle_secs,
+            "restarts": info.restarts,
+            "weight": info.weight,
+            "requests_total": requests,
+            "request_duration_avg_ms": if duration.get_count() > 0 {
+                duration.get_sum() / duration.get_count() as f64
+            } else {
+                0.0
+            },
+            "request_duration_p99_ms": 0.0, // TODO: calculate from histogram
+            "storage_used_bytes": info.storage_used_bytes,
+            "storage_quota_bytes": info.storage_quota_bytes,
+        }));
+    }
+
+    // Summary stats
+    let total_instances = instances.len();
+    let healthy_count = instances.iter().filter(|i| i.health == tenement::instance::HealthStatus::Healthy).count();
+    let total_requests: u64 = metrics.requests_total.all().await.iter().map(|(_, v)| *v).sum();
+
+    Json(serde_json::json!({
+        "summary": {
+            "total_instances": total_instances,
+            "healthy_instances": healthy_count,
+            "total_requests": total_requests,
+        },
+        "instances": instance_telemetry,
+    }))
+}
+
 /// List all running instances (scoped by tenant token if present)
 async fn list_instances(
     State(state): State<AppState>,
@@ -828,6 +881,13 @@ async fn proxy_to_instance(
     req: Request<Body>,
 ) -> Response {
     let start = std::time::Instant::now();
+    tracing::debug!(
+        process = process,
+        instance = id.unwrap_or("weighted"),
+        method = %req.method(),
+        path = %req.uri().path(),
+        "proxy request"
+    );
 
     // Check if process is configured first
     if !state.hypervisor.has_process(process) {

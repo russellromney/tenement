@@ -3,11 +3,25 @@
 
   let instances = $state([]);
   let logs = $state([]);
-  let metrics = $state('');
-  let activeTab = $state('instances');
+  let telemetry = $state(null);
+  let activeTab = $state('overview');
   let logStream = $state(null);
   let loading = $state(true);
   let error = $state(null);
+
+  // Fetch telemetry (structured JSON)
+  async function fetchTelemetry() {
+    try {
+      const res = await fetch('/api/telemetry');
+      telemetry = await res.json();
+      // Also populate instances from telemetry
+      if (telemetry && telemetry.instances) {
+        instances = telemetry.instances;
+      }
+    } catch (e) {
+      error = e.message;
+    }
+  }
 
   // Fetch instances
   async function fetchInstances() {
@@ -29,23 +43,13 @@
     }
   }
 
-  // Fetch metrics
-  async function fetchMetrics() {
-    try {
-      const res = await fetch('/metrics');
-      metrics = await res.text();
-    } catch (e) {
-      error = e.message;
-    }
-  }
-
   // Start log streaming
   function startLogStream() {
     if (logStream) logStream.close();
     logStream = new EventSource('/api/logs/stream');
     logStream.onmessage = (event) => {
       const entry = JSON.parse(event.data);
-      logs = [entry, ...logs.slice(0, 99)];
+      logs = [entry, ...logs.slice(0, 199)];
     };
     logStream.onerror = () => {
       logStream.close();
@@ -53,7 +57,6 @@
     };
   }
 
-  // Stop log streaming
   function stopLogStream() {
     if (logStream) {
       logStream.close();
@@ -61,77 +64,55 @@
     }
   }
 
-  // Refresh data based on active tab
   function refreshData() {
     loading = true;
     error = null;
-
-    if (activeTab === 'instances') {
-      fetchInstances().finally(() => loading = false);
-    } else if (activeTab === 'logs') {
-      fetchLogs().finally(() => loading = false);
-    } else if (activeTab === 'metrics') {
-      fetchMetrics().finally(() => loading = false);
-    }
+    const p = activeTab === 'logs'
+      ? fetchLogs()
+      : fetchTelemetry();
+    p.finally(() => loading = false);
   }
 
-  // Format uptime
   function formatUptime(secs) {
+    if (!secs && secs !== 0) return '-';
     if (secs < 60) return `${secs}s`;
     if (secs < 3600) return `${Math.floor(secs / 60)}m`;
     if (secs < 86400) return `${Math.floor(secs / 3600)}h`;
     return `${Math.floor(secs / 86400)}d`;
   }
 
-  // Format timestamp
   function formatTime(ts) {
     return new Date(ts).toLocaleTimeString();
   }
 
-  // Health status color
-  function healthColor(status) {
-    switch (status) {
-      case 'healthy': return 'text-green-600';
-      case 'degraded': return 'text-yellow-600';
-      case 'unhealthy': return 'text-red-600';
-      default: return 'text-gray-600';
-    }
-  }
-
-  // Format bytes to human-readable (e.g., "134MB")
   function formatBytes(bytes) {
-    const KB = 1024;
-    const MB = KB * 1024;
-    const GB = MB * 1024;
+    if (!bytes) return '0B';
+    const KB = 1024, MB = KB * 1024, GB = MB * 1024;
     if (bytes >= GB) return `${(bytes / GB).toFixed(1)}GB`;
     if (bytes >= MB) return `${Math.floor(bytes / MB)}MB`;
     if (bytes >= KB) return `${Math.floor(bytes / KB)}KB`;
     return `${bytes}B`;
   }
 
-  // Format storage display (e.g., "134MB / 512MB" or "134MB" if no quota)
-  function formatStorage(inst) {
-    const used = formatBytes(inst.storage_used_bytes || 0);
-    if (inst.storage_quota_bytes) {
-      return `${used} / ${formatBytes(inst.storage_quota_bytes)}`;
-    }
-    return used;
+  function healthColor(status) {
+    if (status === 'healthy') return '#22c55e';
+    if (status === 'degraded') return '#eab308';
+    if (status === 'unhealthy' || status === 'failed') return '#ef4444';
+    return '#6b7280';
   }
 
-  // Storage usage color based on percentage
-  function storageColor(inst) {
-    if (!inst.storage_quota_bytes) return 'text-gray-500';
-    const ratio = (inst.storage_used_bytes || 0) / inst.storage_quota_bytes;
-    if (ratio > 0.9) return 'text-red-600';
-    if (ratio > 0.7) return 'text-yellow-600';
-    return 'text-green-600';
+  function healthBg(status) {
+    if (status === 'healthy') return 'bg-green-100 text-green-800';
+    if (status === 'degraded') return 'bg-yellow-100 text-yellow-800';
+    if (status === 'unhealthy' || status === 'failed') return 'bg-red-100 text-red-800';
+    return 'bg-gray-100 text-gray-800';
   }
 
-  // Handle tab change
   function selectTab(tab) {
     activeTab = tab;
     if (tab === 'logs') {
       startLogStream();
+      fetchLogs();
     } else {
       stopLogStream();
     }
@@ -140,12 +121,7 @@
 
   onMount(() => {
     refreshData();
-
-    // Poll for instances every 5s
-    const interval = setInterval(() => {
-      if (activeTab === 'instances') fetchInstances();
-    }, 5000);
-
+    const interval = setInterval(fetchTelemetry, 5000);
     return () => {
       clearInterval(interval);
       stopLogStream();
@@ -153,77 +129,153 @@
   });
 </script>
 
-<div class="min-h-screen bg-gray-50">
+<div class="min-h-screen bg-gray-950 text-gray-100">
   <!-- Header -->
-  <header class="bg-white shadow-sm">
-    <div class="max-w-7xl mx-auto px-4 py-4 flex items-center justify-between">
-      <h1 class="text-xl font-semibold text-gray-900">tenement</h1>
-      <span class="text-sm text-gray-500">process hypervisor</span>
+  <header class="border-b border-gray-800 bg-gray-900">
+    <div class="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
+      <div class="flex items-center gap-3">
+        <h1 class="text-lg font-semibold text-white tracking-tight">tenement</h1>
+        <span class="text-xs text-gray-500 bg-gray-800 px-2 py-0.5 rounded">dashboard</span>
+      </div>
+      {#if telemetry}
+        <div class="flex gap-6 text-sm">
+          <div>
+            <span class="text-gray-500">instances</span>
+            <span class="ml-1 font-mono text-white">{telemetry.summary.total_instances}</span>
+          </div>
+          <div>
+            <span class="text-gray-500">healthy</span>
+            <span class="ml-1 font-mono text-green-400">{telemetry.summary.healthy_instances}</span>
+          </div>
+          <div>
+            <span class="text-gray-500">requests</span>
+            <span class="ml-1 font-mono text-blue-400">{telemetry.summary.total_requests.toLocaleString()}</span>
+          </div>
+        </div>
+      {/if}
     </div>
   </header>
 
   <!-- Tabs -->
-  <div class="max-w-7xl mx-auto px-4 mt-4">
-    <div class="border-b border-gray-200">
-      <nav class="-mb-px flex space-x-8">
+  <div class="max-w-7xl mx-auto px-6 mt-4">
+    <nav class="flex gap-1 bg-gray-900 rounded-lg p-1 w-fit">
+      {#each ['overview', 'instances', 'logs'] as tab}
         <button
-          onclick={() => selectTab('instances')}
-          class="py-2 px-1 border-b-2 font-medium text-sm {activeTab === 'instances' ? 'border-blue-500 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700'}"
+          onclick={() => selectTab(tab)}
+          class="px-4 py-1.5 text-sm rounded-md transition-colors {activeTab === tab ? 'bg-gray-700 text-white' : 'text-gray-400 hover:text-gray-200'}"
         >
-          Instances
+          {tab.charAt(0).toUpperCase() + tab.slice(1)}
         </button>
-        <button
-          onclick={() => selectTab('logs')}
-          class="py-2 px-1 border-b-2 font-medium text-sm {activeTab === 'logs' ? 'border-blue-500 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700'}"
-        >
-          Logs
-        </button>
-        <button
-          onclick={() => selectTab('metrics')}
-          class="py-2 px-1 border-b-2 font-medium text-sm {activeTab === 'metrics' ? 'border-blue-500 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700'}"
-        >
-          Metrics
-        </button>
-      </nav>
-    </div>
+      {/each}
+    </nav>
   </div>
 
   <!-- Content -->
-  <main class="max-w-7xl mx-auto px-4 py-6">
+  <main class="max-w-7xl mx-auto px-6 py-6">
     {#if error}
-      <div class="bg-red-50 text-red-700 p-4 rounded-md mb-4">
-        Error: {error}
+      <div class="bg-red-900/30 text-red-400 p-4 rounded-lg mb-4 text-sm border border-red-800">
+        {error}
       </div>
     {/if}
 
-    {#if loading}
-      <div class="text-gray-500">Loading...</div>
-    {:else if activeTab === 'instances'}
-      <!-- Instances Table -->
-      {#if instances.length === 0}
-        <div class="text-gray-500 text-center py-8">No instances running</div>
+    {#if activeTab === 'overview'}
+      <!-- Overview: health grid + per-instance telemetry -->
+      {#if !telemetry || instances.length === 0}
+        <div class="text-gray-500 text-center py-16">No instances running</div>
       {:else}
-        <div class="bg-white shadow rounded-lg overflow-hidden">
-          <table class="min-w-full divide-y divide-gray-200">
-            <thead class="bg-gray-50">
-              <tr>
-                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Instance</th>
-                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Socket</th>
-                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Uptime</th>
-                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Restarts</th>
-                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Storage</th>
-                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Health</th>
+        <!-- Health grid -->
+        <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3 mb-8">
+          {#each instances as inst}
+            <div class="bg-gray-900 border border-gray-800 rounded-lg p-3">
+              <div class="flex items-center justify-between mb-2">
+                <span class="text-xs font-mono text-gray-300 truncate">{inst.instance || inst.id}</span>
+                <span class="w-2 h-2 rounded-full" style="background-color: {healthColor(inst.health)}"></span>
+              </div>
+              <div class="text-xs text-gray-500 space-y-0.5">
+                <div class="flex justify-between">
+                  <span>reqs</span>
+                  <span class="font-mono text-gray-300">{(inst.requests_total || 0).toLocaleString()}</span>
+                </div>
+                <div class="flex justify-between">
+                  <span>avg</span>
+                  <span class="font-mono text-gray-300">{(inst.request_duration_avg_ms || 0).toFixed(1)}ms</span>
+                </div>
+                <div class="flex justify-between">
+                  <span>up</span>
+                  <span class="font-mono text-gray-300">{formatUptime(inst.uptime_secs)}</span>
+                </div>
+              </div>
+            </div>
+          {/each}
+        </div>
+
+        <!-- Detailed table -->
+        <div class="bg-gray-900 border border-gray-800 rounded-lg overflow-hidden">
+          <table class="min-w-full">
+            <thead>
+              <tr class="border-b border-gray-800">
+                <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Instance</th>
+                <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Health</th>
+                <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Requests</th>
+                <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Avg Latency</th>
+                <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Uptime</th>
+                <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Idle</th>
+                <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Restarts</th>
+                <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Weight</th>
+                <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Storage</th>
               </tr>
             </thead>
-            <tbody class="bg-white divide-y divide-gray-200">
+            <tbody>
               {#each instances as inst}
-                <tr>
-                  <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{inst.id}</td>
-                  <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 font-mono">{inst.socket}</td>
-                  <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{formatUptime(inst.uptime_secs)}</td>
-                  <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{inst.restarts}</td>
-                  <td class="px-6 py-4 whitespace-nowrap text-sm {storageColor(inst)}">{formatStorage(inst)}</td>
-                  <td class="px-6 py-4 whitespace-nowrap text-sm {healthColor(inst.health)}">{inst.health}</td>
+                <tr class="border-b border-gray-800/50 hover:bg-gray-800/30">
+                  <td class="px-4 py-3 text-sm font-mono text-gray-200">{inst.id || `${inst.process}:${inst.instance}`}</td>
+                  <td class="px-4 py-3">
+                    <span class="text-xs px-2 py-0.5 rounded-full {healthBg(inst.health)}">{inst.health}</span>
+                  </td>
+                  <td class="px-4 py-3 text-sm text-right font-mono text-gray-300">{(inst.requests_total || 0).toLocaleString()}</td>
+                  <td class="px-4 py-3 text-sm text-right font-mono text-gray-300">{(inst.request_duration_avg_ms || 0).toFixed(1)}ms</td>
+                  <td class="px-4 py-3 text-sm text-right text-gray-400">{formatUptime(inst.uptime_secs)}</td>
+                  <td class="px-4 py-3 text-sm text-right text-gray-400">{formatUptime(inst.idle_secs)}</td>
+                  <td class="px-4 py-3 text-sm text-right text-gray-400">{inst.restarts}</td>
+                  <td class="px-4 py-3 text-sm text-right text-gray-400">{inst.weight}</td>
+                  <td class="px-4 py-3 text-sm text-right text-gray-400">{formatBytes(inst.storage_used_bytes)}</td>
+                </tr>
+              {/each}
+            </tbody>
+          </table>
+        </div>
+      {/if}
+
+    {:else if activeTab === 'instances'}
+      <!-- Instances: same as overview table but focused -->
+      {#if instances.length === 0}
+        <div class="text-gray-500 text-center py-16">No instances running</div>
+      {:else}
+        <div class="bg-gray-900 border border-gray-800 rounded-lg overflow-hidden">
+          <table class="min-w-full">
+            <thead>
+              <tr class="border-b border-gray-800">
+                <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Instance</th>
+                <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Health</th>
+                <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Uptime</th>
+                <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Idle</th>
+                <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Restarts</th>
+                <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Weight</th>
+                <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Storage</th>
+              </tr>
+            </thead>
+            <tbody>
+              {#each instances as inst}
+                <tr class="border-b border-gray-800/50 hover:bg-gray-800/30">
+                  <td class="px-4 py-3 text-sm font-mono text-gray-200">{inst.id || `${inst.process}:${inst.instance}`}</td>
+                  <td class="px-4 py-3">
+                    <span class="text-xs px-2 py-0.5 rounded-full {healthBg(inst.health)}">{inst.health}</span>
+                  </td>
+                  <td class="px-4 py-3 text-sm text-right text-gray-400">{formatUptime(inst.uptime_secs)}</td>
+                  <td class="px-4 py-3 text-sm text-right text-gray-400">{formatUptime(inst.idle_secs)}</td>
+                  <td class="px-4 py-3 text-sm text-right text-gray-400">{inst.restarts}</td>
+                  <td class="px-4 py-3 text-sm text-right text-gray-400">{inst.weight}</td>
+                  <td class="px-4 py-3 text-sm text-right text-gray-400">{formatBytes(inst.storage_used_bytes)}</td>
                 </tr>
               {/each}
             </tbody>
@@ -233,36 +285,31 @@
 
     {:else if activeTab === 'logs'}
       <!-- Logs -->
-      <div class="flex justify-between items-center mb-4">
+      <div class="flex justify-between items-center mb-3">
         <span class="text-sm text-gray-500">
-          {logStream ? 'Streaming live...' : 'Log stream disconnected'}
+          {logStream ? 'Streaming live' : 'Disconnected'}
+          <span class="inline-block w-2 h-2 rounded-full ml-1 {logStream ? 'bg-green-500' : 'bg-gray-600'}"></span>
         </span>
         <button
           onclick={() => logStream ? stopLogStream() : startLogStream()}
-          class="text-sm text-blue-600 hover:text-blue-800"
+          class="text-sm px-3 py-1 rounded bg-gray-800 text-gray-300 hover:bg-gray-700 transition-colors"
         >
-          {logStream ? 'Stop' : 'Start'} streaming
+          {logStream ? 'Stop' : 'Start'}
         </button>
       </div>
-      <div class="bg-gray-900 rounded-lg p-4 font-mono text-sm overflow-auto max-h-[600px]">
+      <div class="bg-gray-900 border border-gray-800 rounded-lg p-4 font-mono text-xs overflow-auto max-h-[700px] leading-relaxed">
         {#if logs.length === 0}
-          <div class="text-gray-500">No logs available</div>
+          <div class="text-gray-600">No logs available</div>
         {:else}
           {#each logs as log}
-            <div class="py-0.5">
-              <span class="text-gray-500">{formatTime(log.timestamp)}</span>
-              <span class="text-blue-400">[{log.process}:{log.instance_id}]</span>
-              <span class="{log.level === 'stderr' ? 'text-red-400' : 'text-green-400'}">{log.level}</span>
-              <span class="text-gray-300">{log.message}</span>
+            <div class="py-0.5 hover:bg-gray-800/30 px-1 -mx-1 rounded">
+              <span class="text-gray-600">{formatTime(log.timestamp)}</span>
+              <span class="text-blue-400 ml-1">{log.process}:{log.instance_id}</span>
+              <span class="ml-1 {log.level === 'stderr' ? 'text-red-400' : 'text-gray-500'}">{log.level === 'stderr' ? 'ERR' : 'OUT'}</span>
+              <span class="text-gray-300 ml-1">{log.message}</span>
             </div>
           {/each}
         {/if}
-      </div>
-
-    {:else if activeTab === 'metrics'}
-      <!-- Metrics -->
-      <div class="bg-white shadow rounded-lg p-6">
-        <pre class="text-sm text-gray-700 overflow-auto">{metrics || 'No metrics available'}</pre>
       </div>
     {/if}
   </main>
