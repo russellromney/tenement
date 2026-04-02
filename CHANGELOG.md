@@ -2,6 +2,12 @@
 
 ## v0.2.0
 
+### Phase Break Stuff (Security Hardening)
+- Auth DoS prevention: rate limiting on failed auth attempts (10 failures triggers 5-second cooldown, skipping Argon2)
+- Spawn race condition fix: "spawning" guard set prevents concurrent spawns of the same instance
+- Error message sanitization: subdomain proxy responses no longer leak internal paths or process details to unauthenticated users
+- Network namespace isolation deferred (requires veth pair setup, would break TCP port proxying)
+
 ### Phase My Way (CLI Overhaul)
 - CLI commands now HTTP to the running server instead of creating local Hypervisors
 - `ten spawn api:prod`, `ten stop api:prod` use consistent colon notation everywhere

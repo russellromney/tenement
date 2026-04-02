@@ -2,28 +2,14 @@
 
 See [CHANGELOG.md](CHANGELOG.md) for completed work.
 
-## Phase Break Stuff -- Security Hardening
+## Phase Break Stuff -- Security Hardening (deferred: network namespace isolation)
 > After: (none) · Before: Phase Counterfeit
 
-Critical security fixes.
-
-### a. Network namespace isolation
-- Add `CLONE_NEWNET` to namespace runtime so tenant processes can't reach each other over localhost
-- Without this, any tenant can connect to `127.0.0.1:{port}` of any other tenant
-- Create a veth pair per instance to provide outbound connectivity while isolating inbound
-
-### b. Auth DoS prevention
-- Argon2 runs on every request; attacker can exhaust CPU with invalid tokens
-- Cache the verified token hash in memory after first successful verification
-- Compare in constant-time per request instead of re-running Argon2
-
-### c. Spawn race condition
-- Two concurrent spawns for the same instance can both pass the "already running" read check
-- Use a write lock for the entire check-and-insert, or a per-instance spawn mutex
-
-### d. Error message sanitization
-- Subdomain proxy error responses leak internal paths and error details to unauthenticated users
-- Return generic errors externally, log details internally
+### a. Network namespace isolation (DEFERRED)
+- Requires adding `CLONE_NEWNET` to namespace runtime with veth pair setup
+- Would break current TCP port proxying model (tenant in new netns unreachable from host)
+- Needs design decision: switch to Unix socket communication, or implement full container networking
+- Revisit when the single-server story is more mature
 
 ## Phase Counterfeit -- Fix Fake Features
 > After: Phase Break Stuff · Before: Phase Rollin
