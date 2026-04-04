@@ -552,15 +552,15 @@ fn extract_cookie<'a>(headers: &'a axum::http::HeaderMap, name: &str) -> String 
 async fn dashboard(
     State(state): State<AppState>,
     req: Request<Body>,
-) -> impl IntoResponse {
+) -> Response {
     let token = extract_cookie(req.headers(), "tenement_token");
-    let (instances, summary, error) = if token.is_empty() {
-        (vec![], None, None)
-    } else {
-        match fetch_dashboard_data(&state, &token).await {
-            Ok(data) => data,
-            Err(e) => (vec![], None, Some(e)),
-        }
+    if token.is_empty() {
+        return (StatusCode::SEE_OTHER, [(axum::http::header::LOCATION, "/login")]).into_response();
+    }
+
+    let (instances, summary, error) = match fetch_dashboard_data(&state, &token).await {
+        Ok(data) => data,
+        Err(e) => (vec![], None, Some(e)),
     };
 
     let tmpl = crate::dashboard::OverviewTemplate {
@@ -570,7 +570,7 @@ async fn dashboard(
         instances,
         error,
     };
-    axum::response::Html(tmpl.to_string())
+    axum::response::Html(tmpl.to_string()).into_response()
 }
 
 /// Login page
