@@ -1,0 +1,12 @@
+[settings]
+data_dir = "./data"
+
+[service.notes]
+command = "/Users/russellromney/.local/bin/uv run python app.py"
+health = "/health"
+idle_timeout = 300
+isolation = "process"
+
+[service.notes.env]
+DATA_DIR = "{data_dir}/{id}"
+TENANT_ID = "{id}"

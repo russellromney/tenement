@@ -31,7 +31,9 @@ pub struct Config {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Settings {
-    /// Data directory for instance state
+    /// Global data directory for tenement state (DB, tokens, certs).
+    /// Also used as the base for per-instance data dirs at {data_dir}/{process}/{id}/.
+    /// The {data_dir} interpolation variable in service configs refers to this path.
     #[serde(default = "default_data_dir")]
     pub data_dir: PathBuf,
 
@@ -200,7 +202,8 @@ pub struct ProcessConfig {
     pub idle_timeout: Option<u64>,
 
     /// Startup timeout in seconds (default: 10)
-    /// How long to wait for a process to create its socket before giving up.
+    /// How long to wait for a process to pass its first health check.
+    /// Increase for commands that compile before serving (e.g. `go run`: 30-60s).
     #[serde(default = "default_startup_timeout")]
     pub startup_timeout: u64,
 

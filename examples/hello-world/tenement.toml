@@ -10,3 +10,4 @@
 [service.hello]
 command = "./server.sh"
 health = "/"
+isolation = "process"  # Use "namespace" on Linux for PID isolation

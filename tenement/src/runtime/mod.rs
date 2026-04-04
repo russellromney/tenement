@@ -180,7 +180,14 @@ impl RuntimeHandle {
     pub async fn kill(&mut self) -> Result<()> {
         match self {
             RuntimeHandle::Process { child, .. } | RuntimeHandle::Namespace { child, .. } => {
-                child.kill().await?;
+                // Kill the entire process group (child + all descendants)
+                #[cfg(unix)]
+                if let Some(pid) = child.id() {
+                    unsafe { libc::kill(-(pid as i32), libc::SIGKILL); }
+                }
+                // Also kill via tokio handle and reap the zombie
+                let _ = child.kill().await;
+                let _ = child.wait().await;
                 Ok(())
             }
             RuntimeHandle::Firecracker {

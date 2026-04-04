@@ -40,13 +40,28 @@ impl Runtime for ProcessRuntime {
             .stderr(Stdio::piped())
             .kill_on_drop(true);
 
+        // Put child in its own process group so we can kill all descendants
+        #[cfg(unix)]
+        unsafe {
+            cmd.pre_exec(|| {
+                if libc::setpgid(0, 0) != 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+
         if let Some(workdir) = &config.workdir {
             cmd.current_dir(workdir);
         }
 
-        let child = cmd
-            .spawn()
-            .with_context(|| format!("Failed to spawn process: {}", config.command))?;
+        let child = cmd.spawn().with_context(|| {
+            format!(
+                "Failed to spawn process: {} {}\nCheck that the command exists and is executable. Use 'ten logs' to see output.",
+                config.command,
+                config.args.join(" ")
+            )
+        })?;
 
         Ok(RuntimeHandle::Process {
             child,
@@ -291,6 +306,40 @@ mod tests {
         // Give it time to exit
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         assert!(!handle.is_running().await);
+    }
+
+    // ===========================
+    // PROCESS GROUP KILL TESTS
+    // ===========================
+
+    #[tokio::test]
+    async fn test_kill_also_kills_grandchildren() {
+        // Spawn a shell that backgrounds a sleep, then waits.
+        // Without process group kill, the sleep would survive.
+        let runtime = ProcessRuntime::new();
+        let config = test_spawn_config(
+            "sh",
+            vec!["-c", "sleep 300 & wait"],
+            PathBuf::from("/tmp/test-pgid-kill.sock"),
+        );
+
+        let mut handle = runtime.spawn(&config).await.unwrap();
+        // Give shell time to fork the background sleep
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        assert!(handle.is_running().await);
+
+        // Get the child PID before killing
+        let child_pid = handle.pid().expect("should have a PID");
+
+        handle.kill().await.unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+        // The process group should be gone. Verify with kill(0) signal probe.
+        #[cfg(unix)]
+        {
+            let pgid_alive = unsafe { libc::kill(-(child_pid as i32), 0) };
+            assert_eq!(pgid_alive, -1, "Process group should be dead after kill");
+        }
     }
 
     // ===================

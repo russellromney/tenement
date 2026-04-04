@@ -244,8 +244,20 @@ impl Hypervisor {
         };
 
         // Build environment
-        let command = process_config.command_interpolated(process_name, id, data_dir, port);
-        let args = process_config.args_interpolated(process_name, id, data_dir, port);
+        // If the user wrote `command = "uv run python app.py"` with no args,
+        // shell-split the command string into executable + arguments.
+        let raw_command = process_config.command_interpolated(process_name, id, data_dir, port);
+        let explicit_args = process_config.args_interpolated(process_name, id, data_dir, port);
+        let (command, args) = if explicit_args.is_empty() {
+            let parts = shell_words::split(&raw_command)
+                .with_context(|| format!("Failed to parse command: {}", raw_command))?;
+            let (cmd, rest) = parts.split_first()
+                .map(|t| (t.0.clone(), t.1.to_vec()))
+                .unwrap_or((raw_command, vec![]));
+            (cmd, rest)
+        } else {
+            (raw_command, explicit_args)
+        };
         let mut env = process_config.env_interpolated(process_name, id, data_dir, port);
 
         // Merge extra env vars
@@ -801,16 +813,26 @@ impl Hypervisor {
             }
         };
 
-        // Get socket and vsock port from the running instance
-        let (socket, vsock_port) = {
+        // Get socket, vsock port, and TCP port from the running instance
+        let (socket, vsock_port, tcp_port) = {
             let instances = self.instances.read().await;
             match instances.get(&instance_id) {
-                Some(instance) => (instance.handle.socket().clone(), instance.handle.vsock_port()),
+                Some(instance) => (
+                    instance.handle.socket().clone(),
+                    instance.handle.vsock_port(),
+                    instance.port,
+                ),
                 None => return HealthStatus::Unknown,
             }
         };
 
-        let result = self.ping_health_with_vsock(&socket, health_endpoint, vsock_port).await;
+        // Use TCP health check for process/namespace/sandbox runtimes,
+        // fall back to Unix socket for VMs
+        let result = if let Some(port) = tcp_port {
+            self.ping_health_tcp(port, health_endpoint).await
+        } else {
+            self.ping_health_with_vsock(&socket, health_endpoint, vsock_port).await
+        };
 
         let mut instances = self.instances.write().await;
         let instance = match instances.get_mut(&instance_id) {
@@ -853,6 +875,40 @@ impl Hypervisor {
                 instance.health_status = status;
                 status
             }
+        }
+    }
+
+    /// Ping a health endpoint via TCP (for process/namespace/sandbox runtimes)
+    async fn ping_health_tcp(&self, port: u16, endpoint: &str) -> Result<()> {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpStream;
+
+        let addr = format!("127.0.0.1:{}", port);
+        let mut stream = tokio::time::timeout(HEALTH_CHECK_TIMEOUT, TcpStream::connect(&addr))
+            .await
+            .context("TCP connection timeout")?
+            .context("Failed to connect")?;
+
+        let request = format!(
+            "GET {} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+            endpoint
+        );
+        stream
+            .write_all(request.as_bytes())
+            .await
+            .context("Failed to write request")?;
+
+        let mut response = vec![0u8; 1024];
+        let n = tokio::time::timeout(HEALTH_CHECK_TIMEOUT, stream.read(&mut response))
+            .await
+            .context("Read timeout")?
+            .context("Failed to read response")?;
+
+        let response_str = String::from_utf8_lossy(&response[..n]);
+        if response_str.contains("200") {
+            Ok(())
+        } else {
+            anyhow::bail!("Unhealthy response")
         }
     }
 
@@ -1701,6 +1757,45 @@ sleep 30
         assert!(socket.to_string_lossy().contains("prod"));
 
         hypervisor.stop("myapp", "prod").await.ok();
+    }
+
+    #[tokio::test]
+    async fn test_spawn_with_command_string_shell_splits() {
+        // When command is "echo hello world" with no explicit args,
+        // it should be shell-split into command="echo", args=["hello", "world"]
+        let config = test_config_with_process("api", "echo hello world", vec![]);
+        let hypervisor = Hypervisor::new(config);
+
+        let result = hypervisor.spawn("api", "test").await;
+        assert!(result.is_ok(), "Shell-split command should spawn: {:?}", result.err());
+
+        hypervisor.stop("api", "test").await.ok();
+    }
+
+    #[tokio::test]
+    async fn test_spawn_with_explicit_args_no_split() {
+        // When args are explicitly provided, command should NOT be split
+        let config = test_config_with_process("api", "echo", vec!["hello", "world"]);
+        let hypervisor = Hypervisor::new(config);
+
+        let result = hypervisor.spawn("api", "test").await;
+        assert!(result.is_ok(), "Explicit args should spawn: {:?}", result.err());
+
+        hypervisor.stop("api", "test").await.ok();
+    }
+
+    #[tokio::test]
+    async fn test_spawn_with_interpolation_and_shell_split() {
+        // Command with interpolation vars should be interpolated first, then shell-split
+        let config = test_config_with_process("api", "echo --id {id} --name {name}", vec![]);
+        let hypervisor = Hypervisor::new(config);
+
+        // Should interpolate to "echo --id user123 --name api" then split into
+        // command="echo", args=["--id", "user123", "--name", "api"]
+        let result = hypervisor.spawn("api", "user123").await;
+        assert!(result.is_ok(), "Interpolated+split command should spawn: {:?}", result.err());
+
+        hypervisor.stop("api", "user123").await.ok();
     }
 
     #[tokio::test]

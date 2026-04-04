@@ -14,6 +14,7 @@ data_dir = "./data"
 [service.web]
 command = "node server.js"
 health = "/health"
+isolation = "process"  # Use "namespace" on Linux for PID isolation
 memory_limit_mb = 128
 
 [service.web.env]

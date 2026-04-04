@@ -5,245 +5,224 @@ description: Complete tenement.toml configuration options
 
 All tenement configuration lives in a single `tenement.toml` file.
 
-## Settings Section
+## Minimal example
+
+```toml
+[service.api]
+command = "python3 app.py"
+health = "/health"
+isolation = "process"
+```
+
+That's it. tenement auto-allocates a port and sets `PORT` in the environment.
+
+## Settings
 
 Global configuration for the tenement server.
 
 ```toml
 [settings]
 data_dir = "/var/lib/tenement"      # Base data directory
-health_check_interval = 10          # Health check interval (seconds)
+health_check_interval = 10          # Seconds between health checks
 max_restarts = 3                    # Max restarts within window
 restart_window = 300                # Restart window (seconds)
 backoff_base_ms = 1000              # Exponential backoff base (1s)
 backoff_max_ms = 60000              # Max backoff delay (60s)
 ```
 
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `data_dir` | string | `/var/lib/tenement` | Base directory for instance data |
-| `health_check_interval` | int | `10` | Seconds between health checks |
-| `max_restarts` | int | `3` | Max restarts before giving up |
-| `restart_window` | int | `300` | Window for counting restarts (seconds) |
-| `backoff_base_ms` | int | `1000` | Initial backoff delay (ms) |
-| `backoff_max_ms` | int | `60000` | Maximum backoff delay (ms) |
+The `data_dir` serves double duty: tenement stores its own state here (DB, tokens, certs), and also creates per-instance directories at `{data_dir}/{process}/{id}/`.
 
-## Service Section
+## Services
 
 Define services that tenement can spawn. Each service is a template for instances.
 
 ```toml
 [service.api]
-command = "uv run python app.py"    # Command to run
-args = ["--port", "8000"]           # Optional command arguments
-workdir = "/app"                    # Optional working directory
-socket = "/tmp/tenement/{name}-{id}.sock"  # Socket path template (default)
-health = "/health"                  # Health check endpoint
-startup_timeout = 10                # Max seconds to create socket
-idle_timeout = 300                  # Auto-stop after N seconds idle
-restart = "on-failure"              # Restart policy
-isolation = "namespace"             # Isolation level (alias: runtime)
+command = "uv run python app.py"    # Shell-split automatically
+health = "/health"                  # HTTP endpoint for health checks
+isolation = "process"               # process (macOS/Linux) or namespace (Linux)
+idle_timeout = 300                  # Stop after N seconds idle (0 = never)
+startup_timeout = 10                # Seconds to wait for first health check
+storage_persist = true              # Keep data dir on stop
+restart = "on-failure"              # always, on-failure, never
 
-# Resource limits (cgroups v2, Linux only)
-memory_limit_mb = 256               # Memory limit in MB
-cpu_shares = 100                    # CPU weight (1-10000)
-
-# Storage quotas
-storage_quota_mb = 100              # Max storage per instance (MB)
-storage_persist = false             # Persist data on stop (default: false)
+# Resource limits (Linux cgroups v2)
+memory_limit_mb = 256
+cpu_shares = 100
+storage_quota_mb = 100
 ```
 
-### Service Fields
+### Command parsing
 
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `command` | string | required | Shell command to start the service |
-| `args` | array | `[]` | Optional command arguments |
-| `workdir` | string | none | Working directory for the process |
-| `socket` | string | `/tmp/tenement/{name}-{id}.sock` | Unix socket path template |
-| `health` | string | none | HTTP path for health checks |
-| `startup_timeout` | int | `10` | Max seconds to wait for socket |
-| `idle_timeout` | int | `0` | Stop after N seconds idle (0 = never) |
-| `restart` | string | `on-failure` | Restart policy: `always`, `on-failure`, `never` |
-| `isolation` | string | `namespace` | Isolation level (alias: `runtime`) |
-| `memory_limit_mb` | int | none | Memory limit in MB (Linux cgroups v2) |
-| `cpu_shares` | int | none | CPU weight 1-10000 (Linux cgroups v2) |
-| `storage_quota_mb` | int | none | Max disk usage per instance (MB) |
-| `storage_persist` | bool | `false` | Keep data directory on instance stop |
+The `command` field is shell-split automatically when no `args` field is provided:
 
-### Isolation Levels
+```toml
+# These are equivalent:
+command = "uv run python app.py"
 
-| Value | Description | Overhead | Use Case |
-|-------|-------------|----------|----------|
-| `process` | No isolation | ~0 | Debugging, trusted code |
-| `namespace` | PID + Mount namespace | ~0 | **Default** - multi-tenant trusted code |
-| `sandbox` | gVisor syscall filtering | ~20MB | Untrusted/third-party code |
-| `firecracker` | Firecracker microVM | ~128MB | Full VM isolation (requires KVM) |
-| `qemu` | QEMU VM | ~128MB | Cross-platform VM (requires KVM/HVF) |
+command = "uv"
+args = ["run", "python", "app.py"]
+```
 
-**Note:** The `runtime` field is accepted as an alias for `isolation` for backwards compatibility.
+Shell quoting works: `command = 'my-app --name "hello world"'` splits correctly.
 
-### Restart Policies
+For commands that compile before serving (like `go run`), increase `startup_timeout`:
 
-| Value | Behavior |
-|-------|----------|
-| `always` | Always restart on exit |
-| `on-failure` | Restart only on non-zero exit |
-| `never` | Never restart |
+```toml
+[service.goapi]
+command = "go run main.go"
+startup_timeout = 30
+```
 
-## Environment Variables
+### Isolation levels
+
+| Value | Platform | Overhead | Use case |
+|-------|----------|----------|----------|
+| `process` | macOS + Linux | ~0 | Development, trusted code |
+| `namespace` | Linux only | ~0 | **Production default.** PID + mount isolation |
+| `sandbox` | Linux only | ~20MB | Untrusted/third-party code (gVisor) |
+
+### Health checks
+
+When a `health` endpoint is configured, tenement sends HTTP GET requests to verify the instance is running:
+
+- **TCP-based instances** (process/namespace/sandbox): health checks go to `http://127.0.0.1:{port}{health}` over TCP
+- **Socket-based instances** (firecracker/qemu): health checks go over the Unix socket
+
+Health status progression: healthy -> degraded (1-2 failures) -> unhealthy (3+ failures, triggers restart) -> failed (exceeded max_restarts).
+
+If no `health` endpoint is configured, tenement checks whether the socket file exists.
+
+### Process groups
+
+Instances are spawned in their own process group. When you stop or kill an instance, all of its child processes are also killed. This prevents orphaned processes from commands like `go run` or `uv run` that spawn subprocesses.
+
+## Environment variables
 
 Per-service environment variables with template support.
 
 ```toml
 [service.api.env]
+DATA_DIR = "{data_dir}/{id}"
 DATABASE_PATH = "{data_dir}/{id}/app.db"
 LOG_LEVEL = "info"
-SECRET_KEY = "${SECRET_KEY}"        # From environment
 ```
 
-**Template variables:**
-- `{name}` - Service name (e.g., "api")
-- `{id}` - Instance ID (e.g., "prod")
-- `{data_dir}` - The `data_dir` from settings
-- `{socket}` - The resolved socket path
-- `{port}` - Auto-allocated TCP port (30000-40000 range)
-- `${VAR}` - Value from host environment
+### Template variables
 
-**Auto-set environment variables:**
-- `PORT` - TCP port allocated for the instance
-- `SOCKET_PATH` - Unix socket path for the instance
+| Variable | Description | Example value |
+|----------|-------------|---------------|
+| `{name}` | Service name | `api` |
+| `{id}` | Instance ID | `alice` |
+| `{data_dir}` | Global data directory from settings | `/var/lib/tenement` |
+| `{port}` | Auto-allocated TCP port | `30001` |
+| `{socket}` | Resolved socket path | `/tmp/tenement/api-alice.sock` |
 
-## Instances Section
+### Auto-set variables
 
-Auto-spawn instances on `ten serve` startup.
+tenement always sets these for every instance:
+
+- `PORT` - TCP port allocated for the instance (30000-40000 range)
+- `SOCKET_PATH` - Unix socket path
+
+Your app should read `PORT` and listen on `127.0.0.1:{PORT}`.
+
+## Auto-spawn instances
+
+Start instances automatically when the server starts:
 
 ```toml
 [instances]
-api = ["prod", "staging"]           # Spawn api:prod and api:staging
-worker = ["default"]                # Spawn worker:default
+api = ["prod", "staging"]
+worker = ["default"]
 ```
 
-Each key is a service name, value is an array of instance IDs to spawn.
+## Routing
 
-**Behavior:**
-- Validates that referenced services exist at config load time
-- Individual spawn failures are logged but don't block others
-- Instances spawn after the server starts listening
+Default routing works by subdomain:
 
-## Routing Section
+| URL pattern | Routes to |
+|-------------|-----------|
+| `alice.api.example.com` | Instance `api:alice` |
+| `api.example.com` | Weighted across all `api` instances |
+| `example.com` | Dashboard |
 
-Configure custom routing rules beyond the default subdomain-based routing.
+Custom routing overrides:
 
 ```toml
 [routing]
-default = "api"                     # Default service for root domain
+default = "api"                     # Root domain -> api service
 
 [routing.subdomain]
-"admin" = "admin-service"           # admin.example.com → admin-service
+"admin" = "admin-service"           # admin.example.com -> admin-service
 
 [routing.path]
-"/api" = "api-service"              # example.com/api/* → api-service
-"/docs" = "docs-service"            # example.com/docs/* → docs-service
+"/api" = "api-service"              # example.com/api/* -> api-service
 ```
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `default` | string | Service to route root domain requests to |
-| `subdomain` | map | Subdomain → service name mappings |
-| `path` | map | Path prefix → service name mappings |
+## TLS
 
-**Default routing (without config):**
-- `{id}.{service}.{domain}` → routes to specific instance
-- `{service}.{domain}` → weighted routing across all instances of service
-- `{domain}` → dashboard
-
-## TLS Section
-
-Configure automatic HTTPS with Let's Encrypt certificates.
+Automatic HTTPS with Let's Encrypt:
 
 ```toml
 [settings.tls]
 enabled = true
-acme_email = "admin@example.com"    # Required for Let's Encrypt
+acme_email = "admin@example.com"
 domain = "example.com"
-cache_dir = "/var/lib/tenement/acme"  # Certificate cache (default: {data_dir}/acme)
-staging = false                     # Use staging for testing (avoids rate limits)
-https_port = 443
-http_port = 80
-dns_provider = "cloudflare"         # For wildcard certs via Caddy
 ```
 
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `enabled` | bool | `false` | Enable TLS |
-| `acme_email` | string | none | Email for Let's Encrypt registration |
-| `domain` | string | none | Domain for TLS certificate |
-| `cache_dir` | string | `{data_dir}/acme` | Directory for certificate cache |
-| `staging` | bool | `false` | Use Let's Encrypt staging environment |
-| `https_port` | int | `443` | HTTPS listening port |
-| `http_port` | int | `80` | HTTP port (redirects + ACME challenges) |
-| `dns_provider` | string | none | DNS provider for Caddy wildcard certs |
+Or via CLI:
 
-**CLI flags take precedence:**
 ```bash
-ten serve --tls --domain example.com --email admin@example.com --staging
+ten serve --tls --domain example.com --email admin@example.com
 ```
 
-## Complete Example
+For wildcard certs (required for subdomain routing over HTTPS), use Caddy as a reverse proxy. See [Production Deployment](/guides/04-production).
+
+## CLI environment
+
+Set `TENEMENT_SERVER` to avoid passing `--server` on every command:
+
+```bash
+export TENEMENT_SERVER=http://localhost:9090
+ten ps              # no --server needed
+ten spawn api:alice
+ten logs api:alice
+```
+
+## Complete example
 
 ```toml
 [settings]
 data_dir = "/var/lib/myapp"
 health_check_interval = 10
-max_restarts = 3
-restart_window = 300
-
-[settings.tls]
-enabled = true
-acme_email = "admin@example.com"
-domain = "example.com"
 
 [service.api]
 command = "uv run python app.py"
 health = "/health"
-idle_timeout = 300
-restart = "on-failure"
 isolation = "namespace"
+idle_timeout = 300
 memory_limit_mb = 256
-cpu_shares = 100
-storage_quota_mb = 100
+storage_persist = true
 
 [service.api.env]
+DATA_DIR = "{data_dir}/{id}"
 DATABASE_PATH = "{data_dir}/{id}/app.db"
-LOG_LEVEL = "info"
 
 [service.worker]
 command = "./worker"
 health = "/health"
 isolation = "namespace"
 memory_limit_mb = 512
-cpu_shares = 200
 
 [instances]
 api = ["prod", "staging"]
 worker = ["default"]
 ```
 
-## CLI Overrides
+See [examples/](https://github.com/russellromney/tenement/tree/main/examples) for complete working setups in Python, Node.js, Go, and multi-runtime configurations.
 
-Some config values can be overridden via CLI flags:
+## Next steps
 
-```bash
-ten serve --port 8080               # Override listen port
-ten serve --domain example.com      # Set domain for routing
-ten serve --tls --email you@x.com   # Enable TLS with ACME
-
-# Use different config file via environment variable
-TENEMENT_CONFIG=custom.toml ten serve
-```
-
-## Next Steps
-
-- [Production Deployment](/guides/04-production) - TLS, systemd, and Caddy setup
-- [Deployments](/guides/05-deployments) - Blue-green and canary patterns
+- [Production Deployment](/guides/04-production) - TLS, systemd, and Caddy
+- [Deployment Patterns](/guides/05-deployments) - Blue-green and canary

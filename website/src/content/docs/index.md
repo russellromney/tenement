@@ -1,56 +1,81 @@
 ---
 title: tenement
-description: Lightweight process hypervisor for single-server deployments
+description: Process hypervisor for single-server deployments
 ---
 
-**Lightweight process hypervisor in Rust.**
+**Process hypervisor for single-server deployments.**
 
-Run 100+ isolated services on a single server, with most idle at any time.
+Run 100+ isolated services on a single server. Each customer gets their own process. Spawn on demand, stop when idle, wake on first request.
+
+```
+alice.notes.example.com  ->  notes:alice  ->  isolated process + own database
+bob.notes.example.com    ->  notes:bob    ->  isolated process + own database
+```
+
+Write single-tenant code. Deploy it for every customer.
+
+## Why not systemd?
+
+systemd runs processes. tenement runs *tenants*.
+
+| | systemd | tenement |
+|---|---------|----------|
+| Routing | You configure nginx per service | `alice.notes.example.com` just works |
+| Scale to zero | No | Idle processes stop, wake on first request |
+| Per-tenant data | You manage it | Each instance gets its own data dir |
+| Spawn tenant | Write a unit file, reload | `ten spawn notes:alice` |
+| Health + restart | Basic restart-on-failure | HTTP health checks, exponential backoff |
+| Deployment | Rolling restart scripts | `ten deploy` + `ten route` (blue-green) |
+| Metrics | Set up exporters | Built-in per-tenant request counts |
+| Logs | journalctl | `ten logs notes:alice`, full-text search |
+
+tenement is for when you want [Fly Machines](https://fly.io/docs/machines/) on your own hardware.
+
+## Get started
+
+```bash
+cargo install tenement-cli
+ten serve --port 8080 --domain localhost
+ten token-gen
+ten spawn api:prod
+curl http://prod.api.localhost:8080/
+```
+
+See the [Quick Start](/intro/01-quick-start) for a complete walkthrough, or jump to the [examples](https://github.com/russellromney/tenement/tree/main/examples).
 
 ## Features
 
-- **Subdomain routing** - `user.api.example.com` → `api:user`
-- **Scale-to-zero** - Stop idle instances, wake on request
-- **Process isolation** - Namespace separation (zero overhead) or gVisor sandbox
-- **Weighted routing** - Blue-green and canary deployments
-- **Auto-restart** - Health checks with exponential backoff
+- **Subdomain routing** - `alice.api.example.com` routes to `api:alice`
+- **Scale-to-zero** - idle processes stop, wake on first request (sub-second)
+- **Per-tenant data** - each instance gets `{data_dir}/{id}/`
+- **Process isolation** - Linux namespaces (zero overhead) or gVisor sandbox
+- **Health checks** - HTTP endpoint checks with exponential backoff
+- **Process groups** - kill an instance, kill all its children (no orphans)
+- **Shell command parsing** - `command = "uv run python app.py"` just works
+- **Weighted routing** - blue-green and canary deployments
 - **Built-in TLS** - Let's Encrypt certificates
-- **Single binary** - ~10MB, one TOML config file
+- **Auth** - admin tokens + tenant-scoped tokens
+- **Prometheus metrics** - per-tenant request counts and latencies
+- **Log capture** - full-text search, SSE streaming, CLI
 
-## Use Cases
+## Examples
 
-- Multi-tenant SaaS (each tenant = isolated process)
-- Microservices on a single server
-- Scale-to-zero services without per-machine pricing
+| Example | What it shows |
+|---------|---------------|
+| [hello-world](https://github.com/russellromney/tenement/tree/main/examples/hello-world) | Simplest setup (bash + netcat) |
+| [python-fastapi](https://github.com/russellromney/tenement/tree/main/examples/python-fastapi) | FastAPI with per-tenant database |
+| [node-fastify](https://github.com/russellromney/tenement/tree/main/examples/node-fastify) | Node.js Fastify server |
+| [go-http](https://github.com/russellromney/tenement/tree/main/examples/go-http) | Go net/http server |
+| [multi-runtime](https://github.com/russellromney/tenement/tree/main/examples/multi-runtime) | Python + Node + Go in one config, 56-test integration script |
+| [auth-test](https://github.com/russellromney/tenement/tree/main/examples/auth-test) | App-level auth passthrough |
+| [multi-tenant](https://github.com/russellromney/tenement/tree/main/examples/multi-tenant) | Per-tenant notes API with SQLite |
 
-## Comparison
+## Docs
 
-| Tool | Trade-off |
-|------|-----------|
-| Docker | Container overhead, slower startup |
-| systemd | No routing, no idle timeout |
-| Kubernetes | Complex for single-server deployments |
-| Fly Machines | Pay per machine, can't overstuff |
-
-## Get Started
-
-- [Quick Start](/intro/01-quick-start) - Installation & first spawn
+- [Quick Start](/intro/01-quick-start) - Installation and first spawn
 - [Why tenement?](/intro/02-economics) - The problem it solves
-
-## Guides
-
-- [Isolation Levels](/guides/01-isolation) - Namespace vs sandbox
-- [Fleet Mode](/guides/02-fleet) - Multi-server orchestration
+- [Concepts](/intro/03-concepts) - Architecture and terminology
 - [Configuration](/guides/03-configuration) - Full TOML reference
-- [Production Setup](/guides/04-production) - TLS, systemd, Caddy
-- [Deployments](/guides/05-deployments) - Blue-green, canary routing
-
-## Use Cases
-
-- [Multi-tenant SaaS](/use-cases/01-multitenant) - Primary use case
-- [Scale-to-Zero Services](/use-cases/02-scale-to-zero) - Idle timeout & wake-on-request
-
-## Reference
-
-- [Roadmap](/reference/roadmap) - What's coming
+- [Production](/guides/04-production) - TLS, systemd, Caddy
+- [Deployment Patterns](/guides/05-deployments) - Blue-green, canary
 - [Troubleshooting](/reference/troubleshooting) - Common issues

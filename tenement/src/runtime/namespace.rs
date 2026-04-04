@@ -65,6 +65,11 @@ mod linux_impl {
         // This runs in the child process before exec, after fork
         unsafe {
             cmd.pre_exec(|| {
+                // Put child in its own process group so we can kill all descendants
+                if libc::setpgid(0, 0) != 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+
                 use nix::mount::{mount, MsFlags};
                 use nix::sched::{unshare, CloneFlags};
 

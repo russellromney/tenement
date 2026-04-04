@@ -14,5 +14,7 @@ data_dir = "./data"
 [service.api]
 command = "./server"
 health = "/health"
+isolation = "process"  # Use "namespace" on Linux for PID isolation
 memory_limit_mb = 64
 cpu_shares = 50
+startup_timeout = 30  # go build/run may need extra time

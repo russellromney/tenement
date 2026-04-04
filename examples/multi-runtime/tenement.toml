@@ -1,0 +1,33 @@
+[settings]
+data_dir = "./data"
+
+[service.pyapi]
+command = "python3 py_app.py"
+health = "/health"
+idle_timeout = 300
+isolation = "process"
+
+[service.pyapi.env]
+DATA_DIR = "{data_dir}/pyapi/{id}"
+TENANT_ID = "{id}"
+
+[service.nodeapi]
+command = "node node_app.js"
+health = "/health"
+idle_timeout = 300
+isolation = "process"
+
+[service.nodeapi.env]
+DATA_DIR = "{data_dir}/nodeapi/{id}"
+TENANT_ID = "{id}"
+
+[service.goapi]
+command = "go run go_app.go"
+health = "/health"
+idle_timeout = 300
+isolation = "process"
+startup_timeout = 30
+
+[service.goapi.env]
+DATA_DIR = "{data_dir}/goapi/{id}"
+TENANT_ID = "{id}"

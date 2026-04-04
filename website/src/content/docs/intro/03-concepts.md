@@ -3,122 +3,133 @@ title: Concepts
 description: Understanding tenement architecture and terminology
 ---
 
-This page explains how tenement works internally: architecture, terminology, and routing.
+## How it works
+
+1. You define a **service** in `tenement.toml` (command, health endpoint, env vars)
+2. You **spawn instances** of that service (`ten spawn notes:alice`)
+3. tenement allocates a TCP port, sets `PORT` env var, starts the process
+4. Requests to `alice.notes.example.com` route to that instance
+5. Health checks run automatically; unhealthy instances restart with backoff
+6. Idle instances stop after the configured timeout, wake on the next request
+
+Your app handles its own auth, business logic, and data. tenement handles routing, lifecycle, and isolation.
 
 ## Architecture
 
 ```
                         Internet
-                            │
-                            ▼
-                    ┌───────────────┐
-                    │   tenement    │
-                    │   (server)    │
-                    │   :8080       │
-                    └───────┬───────┘
-                            │
-            ┌───────────────┼───────────────┐
-            │               │               │
-            ▼               ▼               ▼
-      ┌──────────┐    ┌──────────┐    ┌──────────┐
-      │ api:prod │    │ api:stg  │    │ web:prod │
-      │ :30001   │    │ :30002   │    │ :30003   │
-      └──────────┘    └──────────┘    └──────────┘
+                            |
+                            v
+                    +---------------+
+                    |   tenement    |
+                    |   (server)    |
+                    |   :8080       |
+                    +-------+-------+
+                            |
+            +---------------+---------------+
+            |               |               |
+            v               v               v
+      +----------+    +----------+    +----------+
+      | api:prod |    | api:stg  |    | web:prod |
+      | :30001   |    | :30002   |    | :30003   |
+      +----------+    +----------+    +----------+
 ```
 
 **Request flow:**
 
 1. Request arrives at `prod.api.example.com:8080`
-2. tenement parses subdomain: `{id}.{service}.{domain}` → `api:prod`
-3. Request proxied to instance's allocated port (30001)
+2. tenement parses subdomain: `{id}.{service}.{domain}` -> `api:prod`
+3. Request proxied to instance's TCP port (30001)
 4. Instance processes request and returns response
-5. tenement forwards response to client
+5. All headers pass through (including Authorization)
 
 ## Terminology
 
-| Term | Definition | Example |
+| Term | What it is | Example |
 |------|------------|---------|
-| **Service** | A template defining how to run your app. Defined in `[service.X]` config sections. | `[service.api]` defines the "api" service |
-| **Instance** | A running copy of a service with a unique ID. Multiple instances can run from one service. | `api:prod`, `api:staging`, `api:customer123` |
-| **Spawn** | Start a new instance of a service. | `ten spawn api --id prod` |
-| **Health check** | HTTP request tenement makes to verify instance is running. | `GET /health` returns 200 OK |
-| **Isolation** | The level of separation between instances. | `namespace`, `sandbox`, `process` |
-| **Weight** | Traffic percentage an instance receives (0-100). | `ten weight api:prod 80` |
+| **Service** | A template in `[service.X]` config | `[service.api]` defines the "api" service |
+| **Instance** | A running copy of a service with a unique ID | `api:prod`, `api:alice`, `api:customer123` |
+| **Spawn** | Start a new instance | `ten spawn api:alice` |
+| **Health check** | HTTP GET tenement sends to verify the instance | `GET /health` returns 200 |
+| **Isolation** | Separation level between instances | `process`, `namespace`, `sandbox` |
+| **Weight** | Traffic percentage (0-100) for canary/blue-green | `ten weight api:prod 80` |
 
-## Instance Lifecycle
+## Instance lifecycle
 
 ```
                     ten spawn
-                        │
-                        ▼
-┌─────────┐        ┌─────────┐        ┌─────────┐
-│ stopped │───────▶│ starting│───────▶│ running │
-└─────────┘        └─────────┘        └────┬────┘
-     ▲                                     │
-     │         ┌─────────────┐             │
-     │         │  unhealthy  │◀────────────┤ health check fails
-     │         └──────┬──────┘             │
-     │                │ max_restarts       │
-     │                ▼                    │
-     │         ┌─────────────┐             │
-     └─────────│   failed    │             │
-               └─────────────┘             │
-                                           │
-     ┌────────────────────┬────────────────┘
-     │                    │
-     ▼                    ▼
-┌─────────┐        ┌─────────┐
-│ idle    │───────▶│ stopped │
-│ timeout │        │         │
-└─────────┘        └─────────┘
+                        |
+                        v
++---------+        +---------+        +---------+
+| stopped |------->| starting|------->| running |
++---------+        +---------+        +----+----+
+     ^                                     |
+     |         +-------------+             |
+     |         |  unhealthy  |<------------+ health check fails
+     |         +------+------+             |
+     |                | max_restarts       |
+     |                v                    |
+     |         +-------------+             |
+     +---------+   failed    |             |
+               +-------------+             |
+                                           |
+     +--------------------+----------------+
+     |                    |
+     v                    v
++---------+        +---------+
+| idle    |------->| stopped |
+| timeout |        |         |
++---------+        +---------+
 ```
 
-## Routing Patterns
+## Routing
 
-| URL Pattern | Routing Behavior |
-|-------------|------------------|
-| `{id}.{service}.{domain}` | Direct to specific instance |
-| `{service}.{domain}` | Weighted load balance across all instances |
-| `{domain}` | Dashboard |
+| URL pattern | Routes to |
+|-------------|-----------|
+| `alice.api.example.com` | Instance `api:alice` (direct) |
+| `api.example.com` | Weighted across all `api` instances |
+| `example.com` | Dashboard |
 
-**Examples:**
-- `prod.api.example.com` → always routes to `api:prod`
-- `api.example.com` → load balanced across `api:prod`, `api:staging`, etc.
-- `example.com` → tenement dashboard
+## Health checks
 
-## When to Use tenement
+tenement checks instance health via HTTP:
+
+- **TCP health checks** for process/namespace/sandbox runtimes: sends `GET /health` to `127.0.0.1:{port}`
+- **Socket health checks** for VM runtimes: sends through Unix socket
+
+Status progression: **healthy** -> **degraded** (1-2 failures) -> **unhealthy** (3+, triggers restart) -> **failed** (exceeded max_restarts).
+
+## Process groups
+
+Every instance is spawned in its own process group. When tenement kills an instance, it kills the entire group, including any child processes. This means commands like `go run` or `uv run` (which spawn subprocesses) clean up correctly.
+
+## Auth model
+
+tenement has two layers of auth:
+
+1. **Management API auth** (tenement's concern): Bearer tokens protect spawn/stop/deploy/logs endpoints. Admin tokens have full access; tenant-scoped tokens can only access their own instance.
+
+2. **App auth** (your concern): tenement proxies all headers through unchanged. Your app handles its own authentication however it wants.
+
+These are completely independent. See the [auth-test example](https://github.com/russellromney/tenement/tree/main/examples/auth-test).
+
+## When to use tenement
 
 **Good fit:**
-
-- Multi-tenant SaaS - one process per customer
-- Microservices on a single server
+- Multi-tenant SaaS on one server
+- Scale-to-zero without per-machine pricing
+- Side projects you want to offer as SaaS
 - Development environments needing isolation
-- Cost-sensitive deployments (overstuff a VPS)
-- Scale-to-zero requirements
-- Blue-green and canary deployments
 
 **Not a good fit:**
+- Multi-server deployments (use Kubernetes, Nomad, Fly.io)
+- Container ecosystem (need Docker images, OCI registries)
+- Serverless functions (use Lambda, CloudFlare Workers)
+- High-availability (single server = single point of failure)
 
-- **Multi-server deployments** - use Kubernetes, Nomad, or Fly.io
-- **Windows/macOS production** - tenement is Linux-only
-- **Container ecosystem** - if you need Docker images, OCI registries
-- **Serverless functions** - use Lambda, CloudFlare Workers
-- **Stateful workloads** - tenement doesn't manage databases
-- **High-availability requirements** - single server = single point of failure
+## Next steps
 
-## Comparison
-
-| Need | tenement | Alternative |
-|------|----------|-------------|
-| Multi-tenant on one server | Yes | Docker + nginx |
-| Scale-to-zero | Yes (idle_timeout) | Fly Machines |
-| Subdomain routing | Built-in | nginx/Caddy config |
-| Process isolation | namespace/sandbox | Docker/gVisor |
-| Multi-server | No (use slum) | Kubernetes |
-| Container images | No | Docker |
-
-## Next Steps
-
-- [Configuration Reference](/guides/03-configuration) - All config options
+- [Configuration](/guides/03-configuration) - Full TOML reference
 - [Isolation Levels](/guides/01-isolation) - namespace vs sandbox vs process
-- [Production Deployment](/guides/04-production) - TLS and systemd
+- [Production](/guides/04-production) - TLS and systemd
+- [Examples](https://github.com/russellromney/tenement/tree/main/examples) - Working setups in Python, Node, Go

@@ -17,6 +17,7 @@ data_dir = "./data"
 [service.api]
 command = "uv run python app.py"
 health = "/health"
+isolation = "process"  # Use "namespace" on Linux for PID isolation
 idle_timeout = 300  # Stop after 5 mins idle
 
 [service.api.env]

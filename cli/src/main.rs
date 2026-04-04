@@ -14,7 +14,7 @@ mod caddy;
 #[command(author, version, about = "Hyperlightweight process hypervisor")]
 struct Cli {
     /// Server URL for CLI commands (default: http://localhost:8080)
-    #[arg(long, default_value = "http://localhost:8080", global = true)]
+    #[arg(long, default_value = "http://localhost:8080", global = true, env = "TENEMENT_SERVER")]
     server: String,
 
     /// API token (overrides TENEMENT_TOKEN env var and token file)
