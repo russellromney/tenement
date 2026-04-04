@@ -213,7 +213,7 @@ impl RuntimeHandle {
                     if api_socket.exists() {
                         let _ = Command::new("fuser")
                             .arg("-k")
-                            .arg(api_socket)
+                            .arg(&*api_socket)
                             .output()
                             .await;
                     }
