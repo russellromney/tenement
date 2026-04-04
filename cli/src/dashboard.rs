@@ -10,7 +10,7 @@ use axum::{
 use rust_embed::RustEmbed;
 
 #[derive(RustEmbed)]
-#[folder = "../dashboard/dist"]
+#[folder = "dashboard-dist"]
 struct Assets;
 
 /// Serve a static asset from the embedded dashboard

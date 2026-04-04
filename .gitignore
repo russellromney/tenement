@@ -47,3 +47,4 @@ vmlinux
 # Examples - compiled binaries
 examples/*/apps/go/go-worker
 examples/*/data/
+cli/dashboard-dist/
