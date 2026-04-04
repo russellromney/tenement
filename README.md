@@ -112,7 +112,13 @@ curl http://bob.notes.localhost:8080/notes     # bob's notes (empty, different d
 ten ps                                         # list running instances
 ```
 
-Alice and Bob each get their own process, their own SQLite database, their own data directory. After 5 minutes of no requests, tenement kills the process. The next request wakes it back up in under a second.
+Alice and Bob each get their own process, their own SQLite database, their own data directory. After 5 minutes of no requests, tenement kills the process. The next request wakes it back up:
+
+| Runtime | Cold wake (median) |
+|---------|-------------------|
+| Python | ~65ms |
+| Node.js | ~105ms |
+| Go (`go run`) | ~140ms |
 
 ## How it works
 

@@ -3,88 +3,45 @@ title: Scale-to-Zero Services
 description: Services stop when idle, auto-start on request
 ---
 
-**Idle services stop and cost nothing. Restart automatically on first request.**
+Idle services stop and cost nothing. The next request spawns them back.
 
-```
-service running → 5min idle → stop → memory freed → $0
-new request → socket missing → spawn → route
-```
+## How it works
 
-## Setup
+Set `idle_timeout` in your config and tenement handles the rest. After five minutes with no requests, tenement kills the process and frees the memory. When a request arrives for that subdomain, tenement spawns a fresh instance, waits for the health check to pass, and proxies the request through.
 
-**1. Single-tenant app (no hibernation logic)**
-```python
-from flask import Flask
-import os
-
-app = Flask(__name__)
-
-@app.route("/health")
-def health():
-    return {"status": "ok"}
-
-@app.route("/work", methods=["POST"])
-def work():
-    return {"result": expensive_computation()}
-
-if __name__ == "__main__":
-    port = int(os.getenv("PORT", "8000"))
-    app.run(host="127.0.0.1", port=port)
-```
-
-**2. Configure tenement with idle timeout**
 ```toml
 [service.worker]
 command = "python app.py"
 health = "/health"
-idle_timeout = 300              # Stop after 5 minutes idle
-# Note: PORT env var is automatically set by tenement
+idle_timeout = 300              # stop after 5 minutes idle
 ```
 
-When idle_timeout expires:
-- Instance stops
-- Socket is removed
-- Memory is freed
-- Cost: $0
+Your app doesn't need any hibernation logic. It just starts, serves requests, and exits when killed.
 
-**3. Spawn per job/request**
-```bash
-ten spawn worker --id job123
-```
+## Measured cold wake times
 
-**4. Wake on request**
+These are real numbers from stopping an instance and immediately hitting its subdomain (measured on a MacBook, debug build):
 
-tenement's routing detects missing socket and spawns automatically:
-```
-job123.api.example.com → socket missing → spawn worker:job123 → route
-```
+| Runtime | Cold wake (median) | Range |
+|---------|-------------------|-------|
+| Python (stdlib http.server) | 65ms | 13-174ms |
+| Node.js (http module) | 105ms | 104-110ms |
+| Go (`go run`, cached compile) | 140ms | 100-224ms |
 
-## Why This Works
+Humans perceive anything under ~250ms as instant. These are all well under that threshold.
 
-- **Zero cost when idle** - Stopped services use no memory or CPU
-- **Instant wake** - First request spawns in <200ms (imperceptible)
-- **No app changes** - Service code has zero hibernation logic
-- **Simple scaling** - Just: `ten spawn worker --id $job_id`
+## The economics
 
-## Economics
+Most SaaS customers aren't active at the same time. If you have 1000 tenants configured and 20 are active right now, the other 980 are costing you nothing.
 
 ```
 Traditional: 1000 services always-on
-├── 20MB per service = 20GB RAM
-└── Cost: 10 machines @ $500/month
+  20MB per service = 20GB RAM
+  Cost: 10 machines @ $500/month
 
 Scale-to-zero: 1000 services, ~2% active
-├── 20 running × 20MB = 400MB RAM
-└── Cost: 1 machine @ $5/month
-    Savings: 100x cheaper
+  20 running x 20MB = 400MB RAM
+  Cost: 1 machine @ $5/month
 ```
 
-## Cold Start Reality
-
-Typical wake time: **65-220ms**
-
-- Process spawn: 5-10ms
-- App startup: 50-200ms
-- Network round-trip: 5ms
-
-Humans perceive ~250ms as instant, so this is imperceptible to users.
+The savings are roughly 100x, and the user experience is identical because the wake latency is imperceptible.
