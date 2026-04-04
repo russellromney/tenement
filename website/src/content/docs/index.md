@@ -63,3 +63,4 @@ It doesn't touch your app's auth. All request headers, including `Authorization`
 - [Production](/guides/04-production) covers TLS, systemd, and Caddy for real deployments.
 - [Deployment Patterns](/guides/05-deployments) covers blue-green swaps and canary rollouts.
 - [Troubleshooting](/reference/troubleshooting) has solutions for common issues.
+
