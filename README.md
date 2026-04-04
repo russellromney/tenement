@@ -1,5 +1,9 @@
 # tenement
 
+**Lightweight Rust hypervisor for single-server deployments of many single-tenant processes.**
+
+---
+
 tenement is a process hypervisor for running multi-tenant services on a single server. It spawns one process per tenant, routes requests by subdomain, runs HTTP health checks, and stops idle instances automatically. When the next request arrives, it wakes them back up in under a second.
 
 You write your app as if it serves one customer. tenement runs a copy for each of them.
