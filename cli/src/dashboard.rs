@@ -52,6 +52,41 @@ pub struct LogsTemplate<'a> {
     pub error: Option<String>,
 }
 
+// Content-only templates (no header/nav, for HTMX partial swaps)
+#[derive(Template)]
+#[template(path = "overview_content.html")]
+pub struct OverviewContentTemplate<'a> {
+    pub auth_token: &'a str,
+    pub summary: Option<SummaryData>,
+    pub active_tab: &'a str,
+    pub instances: Vec<InstanceRow>,
+    pub error: Option<String>,
+}
+
+#[derive(Template)]
+#[template(path = "instances_content.html")]
+pub struct InstancesContentTemplate<'a> {
+    pub auth_token: &'a str,
+    pub summary: Option<SummaryData>,
+    pub active_tab: &'a str,
+    pub instances: Vec<InstanceRow>,
+    pub error: Option<String>,
+}
+
+#[derive(Template)]
+#[template(path = "logs_content.html")]
+pub struct LogsContentTemplate<'a> {
+    pub auth_token: &'a str,
+    pub summary: Option<SummaryData>,
+    pub active_tab: &'a str,
+    pub logs: Vec<LogEntry>,
+    pub processes: Vec<String>,
+    pub filter_process: String,
+    pub filter_level: String,
+    pub search: String,
+    pub error: Option<String>,
+}
+
 #[derive(Clone, Debug)]
 pub struct SummaryData {
     pub total_instances: usize,

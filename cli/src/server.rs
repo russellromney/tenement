@@ -78,6 +78,9 @@ pub fn create_router(state: AppState) -> Router {
     Router::new()
         // Dashboard/API routes (root domain)
         .route("/", get(dashboard))
+        .route("/_overview", get(overview_partial))
+        .route("/_instances", get(instances_partial))
+        .route("/_logs", get(logs_partial))
         .route("/login", get(login_page).post(handle_login))
         .route("/instances", get(instances_page))
         .route("/logs", get(logs_page))
@@ -198,7 +201,7 @@ async fn auth_middleware(
     }
 
     // Skip auth for HTML page routes - they use cookie-based auth handled in the handler
-    if path == "/" || path == "/instances" || path == "/logs" {
+    if path == "/" || path == "/instances" || path == "/logs" || path.starts_with("/_") {
         return Ok(next.run(req).await);
     }
 
@@ -669,6 +672,106 @@ async fn logs_page(
     };
 
     let tmpl = crate::dashboard::LogsTemplate {
+        auth_token: &token,
+        summary,
+        active_tab: "logs",
+        logs,
+        processes,
+        filter_process,
+        filter_level,
+        search,
+        error: None,
+    };
+    axum::response::Html(tmpl.to_string())
+}
+
+/// Partial: overview content only (for HTMX refresh)
+async fn overview_partial(
+    State(state): State<AppState>,
+    req: Request<Body>,
+) -> impl IntoResponse {
+    let token = extract_cookie(req.headers(), "tenement_token");
+    let (instances, summary, error) = if token.is_empty() {
+        (vec![], None, None)
+    } else {
+        match fetch_dashboard_data(&state, &token).await {
+            Ok(data) => data,
+            Err(e) => (vec![], None, Some(e)),
+        }
+    };
+
+    let tmpl = crate::dashboard::OverviewContentTemplate {
+        auth_token: &token,
+        summary,
+        active_tab: "overview",
+        instances,
+        error,
+    };
+    axum::response::Html(tmpl.to_string())
+}
+
+/// Partial: instances content only
+async fn instances_partial(
+    State(state): State<AppState>,
+    req: Request<Body>,
+) -> impl IntoResponse {
+    let token = extract_cookie(req.headers(), "tenement_token");
+    let (instances, summary, error) = if token.is_empty() {
+        (vec![], None, None)
+    } else {
+        match fetch_dashboard_data(&state, &token).await {
+            Ok(data) => data,
+            Err(e) => (vec![], None, Some(e)),
+        }
+    };
+
+    let tmpl = crate::dashboard::InstancesContentTemplate {
+        auth_token: &token,
+        summary,
+        active_tab: "instances",
+        instances,
+        error,
+    };
+    axum::response::Html(tmpl.to_string())
+}
+
+/// Partial: logs content only
+async fn logs_partial(
+    State(state): State<AppState>,
+    query: axum::extract::Query<std::collections::HashMap<String, String>>,
+    req: Request<Body>,
+) -> impl IntoResponse {
+    let token = extract_cookie(req.headers(), "tenement_token");
+    let filter_process = query.get("process").cloned().unwrap_or_default();
+    let filter_level = query.get("level").cloned().unwrap_or_default();
+    let search = query.get("search").cloned().unwrap_or_default();
+
+    let logs = if token.is_empty() {
+        vec![]
+    } else {
+        let limit: u32 = query.get("limit").and_then(|v| v.parse().ok()).unwrap_or(100);
+        match fetch_logs(&state, &token, &filter_process, &filter_level, &search, limit).await {
+            Ok(logs) => logs,
+            Err(_) => vec![],
+        }
+    };
+
+    let processes = if token.is_empty() {
+        vec![]
+    } else {
+        match fetch_process_list(&state, &token).await {
+            Ok(p) => p,
+            Err(_) => vec![],
+        }
+    };
+
+    let summary = if token.is_empty() {
+        None
+    } else {
+        fetch_summary(&state, &token).await.ok()
+    };
+
+    let tmpl = crate::dashboard::LogsContentTemplate {
         auth_token: &token,
         summary,
         active_tab: "logs",

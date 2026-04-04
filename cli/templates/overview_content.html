@@ -1,8 +1,3 @@
-{% extends "base.html" %}
-
-{% block title %}tenement - Overview{% endblock %}
-
-{% block content %}
 {% if error.is_some() %}
 <div class="error">{{ error.as_ref().unwrap() }}</div>
 {% endif %}
@@ -43,8 +38,6 @@
             <tr>
                 <th>Instance</th>
                 <th>Health</th>
-                <th style="text-align: right;">Requests</th>
-                <th style="text-align: right;">Avg Latency</th>
                 <th style="text-align: right;">Uptime</th>
                 <th style="text-align: right;">Idle</th>
                 <th style="text-align: right;">Restarts</th>
@@ -58,21 +51,14 @@
             <tr>
                 <td class="mono" style="color: #e5e5e5;">{{ inst.id }}</td>
                 <td><span class="badge badge-{{ inst.health_badge }}">{{ inst.health }}</span></td>
-                <td class="mono" style="text-align: right; color: #ccc;">{{ inst.requests_total }}</td>
-                <td class="mono" style="text-align: right; color: #ccc;">{{ inst.avg_latency_ms }}ms</td>
                 <td style="text-align: right; color: #888;">{{ inst.uptime }}</td>
                 <td style="text-align: right; color: #888;">{{ inst.idle }}</td>
                 <td style="text-align: right; color: #888;">{{ inst.restarts }}</td>
                 <td style="text-align: right; color: #888;">{{ inst.weight }}</td>
                 <td style="text-align: right; color: #888;">{{ inst.storage }}</td>
                 <td>
-                    <button class="btn btn-sm"
-                            hx-post="/api/instances/{{ inst.id }}/restart"
-                            hx-swap="none">restart</button>
-                    <button class="btn btn-sm btn-danger"
-                            hx-delete="/api/instances/{{ inst.id }}"
-                            hx-swap="none"
-                            hx-confirm="Stop {{ inst.id }}?">stop</button>
+                    <button class="btn btn-sm" hx-post="/api/instances/{{ inst.id }}/restart" hx-swap="none">restart</button>
+                    <button class="btn btn-sm btn-danger" hx-delete="/api/instances/{{ inst.id }}" hx-swap="none" hx-confirm="Stop {{ inst.id }}?">stop</button>
                 </td>
             </tr>
             {% endfor %}
@@ -91,12 +77,3 @@
     </form>
 </div>
 {% endif %}
-{% endblock %}
-
-{% block scripts %}
-<script>
-    setInterval(function() {
-        htmx.ajax('GET', '/_overview', {target: 'main', swap: 'innerHTML'});
-    }, 5000);
-</script>
-{% endblock %}
