@@ -5,7 +5,7 @@ description: The problem tenement solves
 
 ## The problem
 
-You're building something you want to offer as a service. Maybe it's a notes app, maybe it's an analytics dashboard, maybe it's an internal tool your company wants to white-label. The simplest architecture is one process and one database per customer. No shared state, no row-level security, no multi-tenant schema migrations. Each customer's data lives in its own SQLite file. The code is trivial to write and trivial to reason about.
+The simplest multi-tenant architecture is one process and one database per customer. No shared state, no row-level security, no multi-tenant schema migrations. Each customer's data lives in its own SQLite file. The code is trivial to write and trivial to reason about.
 
 The hard part is running 500 copies of it on one server.
 
@@ -13,7 +13,7 @@ systemd can run processes, but it doesn't know about routing. You'd write a unit
 
 Docker adds container overhead and image management that you don't need when you're running your own trusted code on your own server. Kubernetes is absurd for a single VPS. Fly Machines is the closest thing to what you want, but you're paying per machine and you can't overstuff them the way you can overstuff your own box.
 
-tenement fills this gap. It's a process hypervisor that handles routing, lifecycle, health checks, and scale-to-zero for you. You write single-tenant code, and tenement handles the multiplexing.
+tenement is a process hypervisor that handles routing, lifecycle, health checks, and scale-to-zero. You write single-tenant code, and tenement handles the multiplexing.
 
 ## The economics
 

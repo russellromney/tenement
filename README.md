@@ -1,8 +1,8 @@
 # tenement
 
-You have a side project you want to sell as SaaS. Each customer should get their own process and their own database, because multi-tenant schemas are a nightmare and you don't want to think about row-level security at 11pm on a Tuesday. But you only have one server.
+tenement is a process hypervisor for running multi-tenant services on a single server. It spawns one process per tenant, routes requests by subdomain, runs HTTP health checks, and stops idle instances automatically. When the next request arrives, it wakes them back up in under a second.
 
-tenement is a process hypervisor that turns that one server into a multi-tenant platform. You write your app as if it serves one customer. tenement runs a copy for each of them, routes requests by subdomain, and stops idle instances to save memory.
+You write your app as if it serves one customer. tenement runs a copy for each of them.
 
 ```
 alice.notes.example.com  ->  notes:alice  ->  isolated process + own database
@@ -13,9 +13,9 @@ bob.notes.example.com    ->  notes:bob    ->  isolated process + own database
 
 ## Why this exists
 
-The obvious tools don't quite fit here. systemd runs processes, but it doesn't route requests or stop idle ones. You'd need to write a unit file for each customer and wire up nginx yourself. Docker adds container overhead and image management you don't need for trusted code on one machine. Kubernetes is absurd for a $5 VPS.
+systemd can run processes, but it doesn't route requests or stop idle ones. You'd write a unit file for each customer and wire up nginx yourself. Docker adds container overhead you don't need for trusted code on one machine. Kubernetes is absurd for a $5 VPS.
 
-What you actually want is something like [Fly Machines](https://fly.io/docs/machines/) on your own hardware. Spawn a process, give it a subdomain, let it sleep when nobody's using it, wake it up on the next request. That's tenement.
+tenement is [Fly Machines](https://fly.io/docs/machines/) on your own hardware. Spawn a process, give it a subdomain, let it sleep when nobody's using it, wake it up on the next request.
 
 | | systemd | tenement |
 |---|---------|----------|

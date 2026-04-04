@@ -3,9 +3,9 @@ title: tenement
 description: Process hypervisor for single-server deployments
 ---
 
-You have a side project you want to sell as SaaS. Each customer should get their own process and their own database, because multi-tenant schemas are a nightmare. But you only have one server.
+tenement is a process hypervisor for running multi-tenant services on a single server. It spawns one process per tenant, routes requests by subdomain, runs HTTP health checks, and stops idle instances automatically. When the next request arrives, it wakes them back up in under a second.
 
-tenement is a process hypervisor that turns that one server into a multi-tenant platform. You write your app as if it serves one customer. tenement runs a copy for each of them, routes requests by subdomain, and stops idle instances to save memory.
+You write your app as if it serves one customer. tenement runs a copy for each of them.
 
 ```
 alice.notes.example.com  ->  notes:alice  ->  isolated process + own database
@@ -14,9 +14,9 @@ bob.notes.example.com    ->  notes:bob    ->  isolated process + own database
 
 ## Why not just use systemd?
 
-systemd runs processes, but it doesn't route requests or stop idle ones. You'd need to write a unit file for each customer and wire up nginx yourself. If you want to add a new customer, that's a unit file, an nginx config block, and a reload. If you have 200 customers and only 10 are active at any time, systemd keeps all 200 processes running.
+systemd runs processes, but it doesn't route requests or stop idle ones. You'd write a unit file for each customer and wire up nginx yourself. If you want to add a new customer, that's a unit file, an nginx config block, and a reload. If you have 200 customers and only 10 are active at any time, systemd keeps all 200 processes running.
 
-tenement gives you what [Fly Machines](https://fly.io/docs/machines/) gives you, but on your own hardware. Spawn a process with one command, give it a subdomain automatically, let it sleep when nobody's using it, wake it up on the next request.
+tenement is [Fly Machines](https://fly.io/docs/machines/) on your own hardware. Spawn a process with one command, give it a subdomain automatically, let it sleep when nobody's using it, wake it up on the next request.
 
 | | systemd | tenement |
 |---|---------|----------|
