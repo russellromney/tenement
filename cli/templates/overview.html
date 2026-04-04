@@ -1,0 +1,102 @@
+{% extends "base.html" %}
+
+{% block title %}tenement - Overview{% endblock %}
+
+{% block content %}
+{% if error.is_some() %}
+<div class="error">{{ error.as_ref().unwrap() }}</div>
+{% endif %}
+
+{% if instances.is_empty() %}
+<p class="text-gray" style="text-align:center; padding: 4rem 0;">No instances running</p>
+{% else %}
+<!-- Health grid -->
+<div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 0.75rem; margin-bottom: 2rem;">
+    {% for inst in instances %}
+    <div style="background: #111; border: 1px solid #1a1a1a; border-radius: 0.5rem; padding: 0.75rem;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
+            <span class="mono" style="color: #ccc; font-size: 0.75rem;">{{ inst.id }}</span>
+            <span style="width: 8px; height: 8px; border-radius: 50%; background: {{ inst.health_color }};"></span>
+        </div>
+        <div style="font-size: 0.75rem; color: #666;">
+            <div style="display: flex; justify-content: space-between;">
+                <span>reqs</span>
+                <span class="mono" style="color: #ccc;">{{ inst.requests_total }}</span>
+            </div>
+            <div style="display: flex; justify-content: space-between;">
+                <span>avg</span>
+                <span class="mono" style="color: #ccc;">{{ inst.avg_latency_ms }}ms</span>
+            </div>
+            <div style="display: flex; justify-content: space-between;">
+                <span>up</span>
+                <span class="mono" style="color: #ccc;">{{ inst.uptime }}</span>
+            </div>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+
+<!-- Instance table -->
+<div style="background: #111; border: 1px solid #1a1a1a; border-radius: 0.5rem; overflow: hidden;">
+    <table>
+        <thead>
+            <tr>
+                <th>Instance</th>
+                <th>Health</th>
+                <th style="text-align: right;">Requests</th>
+                <th style="text-align: right;">Avg Latency</th>
+                <th style="text-align: right;">Uptime</th>
+                <th style="text-align: right;">Idle</th>
+                <th style="text-align: right;">Restarts</th>
+                <th style="text-align: right;">Weight</th>
+                <th style="text-align: right;">Storage</th>
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for inst in instances %}
+            <tr>
+                <td class="mono" style="color: #e5e5e5;">{{ inst.id }}</td>
+                <td><span class="badge badge-{{ inst.health_badge }}">{{ inst.health }}</span></td>
+                <td class="mono" style="text-align: right; color: #ccc;">{{ inst.requests_total }}</td>
+                <td class="mono" style="text-align: right; color: #ccc;">{{ inst.avg_latency_ms }}ms</td>
+                <td style="text-align: right; color: #888;">{{ inst.uptime }}</td>
+                <td style="text-align: right; color: #888;">{{ inst.idle }}</td>
+                <td style="text-align: right; color: #888;">{{ inst.restarts }}</td>
+                <td style="text-align: right; color: #888;">{{ inst.weight }}</td>
+                <td style="text-align: right; color: #888;">{{ inst.storage }}</td>
+                <td>
+                    <button class="btn btn-sm"
+                            hx-post="/api/instances/{{ inst.id }}/restart"
+                            hx-swap="none">restart</button>
+                    <button class="btn btn-sm btn-danger"
+                            hx-delete="/api/instances/{{ inst.id }}"
+                            hx-swap="none"
+                            hx-confirm="Stop {{ inst.id }}?">stop</button>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+
+<!-- Spawn form -->
+<div style="margin-top: 1.5rem; background: #111; border: 1px solid #1a1a1a; border-radius: 0.5rem; padding: 1rem;">
+    <h2 style="font-size: 0.875rem; font-weight: 500; margin-bottom: 0.75rem;">Spawn Instance</h2>
+    <form hx-post="/api/instances/spawn" hx-swap="none" style="display: flex; gap: 0.5rem; align-items: center;">
+        <input type="text" name="process" placeholder="process" value="api" style="width: 120px;" />
+        <span class="text-gray">:</span>
+        <input type="text" name="id" placeholder="id" style="width: 120px;" />
+        <button type="submit" class="btn">Spawn</button>
+    </form>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+    setInterval(function() {
+        htmx.ajax('GET', '/', {target: 'main', swap: 'innerHTML'});
+    }, 5000);
+</script>
+{% endblock %}

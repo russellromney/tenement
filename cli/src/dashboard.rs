@@ -1,83 +1,138 @@
-//! Dashboard static file serving
+//! Dashboard template rendering using askama
 //!
-//! Embeds the Svelte dashboard and serves it at the root domain.
+//! Server-rendered HTML templates with HTMX for interactivity.
 
-use axum::{
-    body::Body,
-    http::{header, StatusCode},
-    response::{IntoResponse, Response},
-};
-use rust_embed::RustEmbed;
+use askama::Template;
 
-#[derive(RustEmbed)]
-#[folder = "dashboard-dist"]
-struct Assets;
+#[derive(Template)]
+#[template(path = "base.html")]
+struct BaseTemplate<'a> {
+    auth_token: &'a str,
+    summary: Option<SummaryData>,
+    active_tab: &'a str,
+}
 
-/// Serve a static asset from the embedded dashboard
-pub async fn serve_asset(path: &str) -> Response {
-    let path = if path.is_empty() || path == "/" {
-        "index.html"
-    } else {
-        path.trim_start_matches('/')
-    };
+#[derive(Template)]
+#[template(path = "login.html")]
+pub struct LoginTemplate {
+    pub error: Option<String>,
+}
 
-    match Assets::get(path) {
-        Some(content) => {
-            let mime = mime_guess::from_path(path).first_or_octet_stream();
-            // Use long cache for hashed assets (JS, CSS), short for HTML
-            let cache_control = if path.ends_with(".html") || path == "index.html" {
-                "public, max-age=0, must-revalidate"
-            } else {
-                "public, max-age=86400" // 24 hours for static assets
-            };
-            (
-                StatusCode::OK,
-                [
-                    (header::CONTENT_TYPE, mime.as_ref()),
-                    (header::CACHE_CONTROL, cache_control),
-                ],
-                Body::from(content.data.into_owned()),
-            )
-                .into_response()
-        }
-        None => {
-            // SPA fallback - serve index.html for unknown paths
-            match Assets::get("index.html") {
-                Some(content) => (
-                    StatusCode::OK,
-                    [
-                        (header::CONTENT_TYPE, "text/html"),
-                        (header::CACHE_CONTROL, "public, max-age=0, must-revalidate"),
-                    ],
-                    Body::from(content.data.into_owned()),
-                )
-                    .into_response(),
-                None => (StatusCode::NOT_FOUND, "Not found").into_response(),
-            }
-        }
+#[derive(Template)]
+#[template(path = "overview.html")]
+pub struct OverviewTemplate<'a> {
+    pub auth_token: &'a str,
+    pub summary: Option<SummaryData>,
+    pub active_tab: &'a str,
+    pub instances: Vec<InstanceRow>,
+    pub error: Option<String>,
+}
+
+#[derive(Template)]
+#[template(path = "instances.html")]
+pub struct InstancesTemplate<'a> {
+    pub auth_token: &'a str,
+    pub summary: Option<SummaryData>,
+    pub active_tab: &'a str,
+    pub instances: Vec<InstanceRow>,
+    pub error: Option<String>,
+}
+
+#[derive(Template)]
+#[template(path = "logs.html")]
+pub struct LogsTemplate<'a> {
+    pub auth_token: &'a str,
+    pub summary: Option<SummaryData>,
+    pub active_tab: &'a str,
+    pub logs: Vec<LogEntry>,
+    pub processes: Vec<String>,
+    pub filter_process: String,
+    pub filter_level: String,
+    pub search: String,
+    pub error: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+pub struct SummaryData {
+    pub total_instances: usize,
+    pub healthy_instances: usize,
+    pub total_requests: u64,
+}
+
+#[derive(Clone, Debug)]
+pub struct InstanceRow {
+    pub id: String,
+    pub health: String,
+    pub health_badge: String,
+    pub health_color: String,
+    pub requests_total: String,
+    pub avg_latency_ms: String,
+    pub uptime: String,
+    pub idle: String,
+    pub restarts: String,
+    pub weight: String,
+    pub storage: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct LogEntry {
+    pub time: String,
+    pub process: String,
+    pub level_label: String,
+    pub is_error: bool,
+    pub message: String,
+}
+
+/// Format seconds into human-readable duration
+pub fn format_duration(secs: u64) -> String {
+    if secs == 0 {
+        return "0s".to_string();
+    }
+    if secs < 60 {
+        return format!("{secs}s");
+    }
+    if secs < 3600 {
+        return format!("{}m", secs / 60);
+    }
+    if secs < 86400 {
+        return format!("{}h", secs / 3600);
+    }
+    format!("{}d", secs / 86400)
+}
+
+/// Format bytes into human-readable size
+pub fn format_bytes(bytes: u64) -> String {
+    let kb = 1024u64;
+    let mb = kb * 1024;
+    let gb = mb * 1024;
+    if bytes >= gb {
+        return format!("{:.1}GB", bytes as f64 / gb as f64);
+    }
+    if bytes >= mb {
+        return format!("{}MB", bytes / mb);
+    }
+    if bytes >= kb {
+        return format!("{}KB", bytes / kb);
+    }
+    format!("{bytes}B")
+}
+
+/// Get health badge class
+pub fn health_badge(status: &str) -> &'static str {
+    match status {
+        "healthy" => "green",
+        "degraded" => "yellow",
+        "unhealthy" | "failed" => "red",
+        _ => "gray",
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_assets_contains_index() {
-        assert!(Assets::get("index.html").is_some());
-    }
-
-    #[test]
-    fn test_assets_contains_js() {
-        // Find a JS file in assets
-        let has_js = Assets::iter().any(|f| f.ends_with(".js"));
-        assert!(has_js, "Should have at least one JS file");
-    }
-
-    #[test]
-    fn test_assets_contains_css() {
-        // Find a CSS file in assets
-        let has_css = Assets::iter().any(|f| f.ends_with(".css"));
-        assert!(has_css, "Should have at least one CSS file");
+/// Get health indicator color
+pub fn health_color(status: &str) -> &'static str {
+    match status {
+        "healthy" => "#22c55e",
+        "degraded" => "#eab308",
+        "unhealthy" | "failed" => "#ef4444",
+        _ => "#6b7280",
     }
 }

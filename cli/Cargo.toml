@@ -50,6 +50,8 @@ rustls.workspace = true
 tokio-rustls.workspace = true
 rustls-acme.workspace = true
 axum-server = { version = "0.7", features = ["tls-rustls"] }
+askama.workspace = true
+chrono.workspace = true
 # HTTP/3 support (optional) - cannot use workspace for optional deps
 h3 = { version = "0.0.6", optional = true }
 h3-quinn = { version = "0.0.7", optional = true }
