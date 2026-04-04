@@ -1,6 +1,6 @@
 # tenement
 
-**Process hypervisor for single-server deployments.**
+**Lightweight process hypervisor for single-server deployments in Rust.**
 
 Pack 100+ services on a $5 VPS. Each customer gets their own process. Spawn on demand, stop when idle, wake on first request.
 
