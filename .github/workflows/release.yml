@@ -1,14 +1,14 @@
 name: Release
 
 on:
-  release:
-    types: [published]
+  push:
+    tags: ['v*']
 
 permissions:
   contents: read
 
 jobs:
-  # Build wheels for multiple platforms
+  # Build wheels for multiple platforms (PyPI)
   build:
     runs-on: ${{ matrix.os }}
     strategy:
@@ -41,6 +41,20 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y gcc-aarch64-linux-gnu
 
+      - name: Setup Node (for dashboard)
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Build dashboard
+        working-directory: dashboard
+        run: |
+          npm ci
+          npm run build
+
+      - name: Copy dashboard dist into CLI crate
+        run: cp -r dashboard/dist cli/dashboard-dist
+
       - name: Build wheels
         uses: PyO3/maturin-action@v1
         with:
@@ -59,6 +73,20 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Setup Node (for dashboard)
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Build dashboard
+        working-directory: dashboard
+        run: |
+          npm ci
+          npm run build
+
+      - name: Copy dashboard dist into CLI crate
+        run: cp -r dashboard/dist cli/dashboard-dist
 
       - name: Build sdist
         uses: PyO3/maturin-action@v1
@@ -97,14 +125,75 @@ jobs:
   publish-crates:
     name: Publish to crates.io
     runs-on: ubuntu-latest
-    environment: pypi
     steps:
       - uses: actions/checkout@v4
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Publish to crates.io
+      - name: Setup Node (for dashboard)
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install soup CLI
+        run: curl -fsSL https://getsoup.dev/install.sh | sh
+
+      - name: Build dashboard
+        working-directory: dashboard
+        run: |
+          npm ci
+          npm run build
+
+      - name: Copy dashboard dist into CLI crate
+        run: cp -r dashboard/dist cli/dashboard-dist
+
+      - name: Publish tenement lib
         env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-        run: cargo publish -p tenement
+          SOUP_TOKEN: ${{ secrets.SOUP_TOKEN }}
+        run: |
+          ~/.soup/bin/soup run --project tenement --env development -- \
+            cargo publish -p tenement --allow-dirty
+
+      - name: Wait for crates.io to index
+        run: sleep 30
+
+      - name: Publish tenement-cli
+        env:
+          SOUP_TOKEN: ${{ secrets.SOUP_TOKEN }}
+        run: |
+          ~/.soup/bin/soup run --project tenement --env development -- \
+            cargo publish -p tenement-cli --allow-dirty
+
+  # Deploy docs to Cloudflare Pages
+  deploy-docs:
+    name: Deploy docs
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      deployments: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install soup CLI
+        run: curl -fsSL https://getsoup.dev/install.sh | sh
+
+      - name: Install dependencies
+        working-directory: website
+        run: npm ci
+
+      - name: Build
+        working-directory: website
+        run: npx astro build
+
+      - name: Deploy to Cloudflare Pages
+        env:
+          SOUP_TOKEN: ${{ secrets.SOUP_TOKEN }}
+        run: |
+          ~/.soup/bin/soup run --project tenement --env development -- \
+            npx wrangler pages deploy website/dist --project-name tenement

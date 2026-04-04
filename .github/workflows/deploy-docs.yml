@@ -1,0 +1,40 @@
+name: Deploy Docs
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'website/**'
+      - 'README.md'
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      deployments: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install soup CLI
+        run: curl -fsSL https://getsoup.dev/install.sh | sh
+
+      - name: Install dependencies
+        working-directory: website
+        run: npm ci
+
+      - name: Build
+        working-directory: website
+        run: npx astro build
+
+      - name: Deploy to Cloudflare Pages
+        env:
+          SOUP_TOKEN: ${{ secrets.SOUP_TOKEN }}
+        run: |
+          ~/.soup/bin/soup run --project tenement --env development -- \
+            npx wrangler pages deploy website/dist --project-name tenement
