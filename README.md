@@ -1,45 +1,43 @@
 # tenement
 
-**Lightweight process hypervisor for single-server deployments in Rust.**
+You have a side project you want to sell as SaaS. Each customer should get their own process and their own database, because multi-tenant schemas are a nightmare and you don't want to think about row-level security at 11pm on a Tuesday. But you only have one server.
 
-Pack 100+ services on a $5 VPS. Each customer gets their own process. Spawn on demand, stop when idle, wake on first request.
+tenement is a process hypervisor that turns that one server into a multi-tenant platform. You write your app as if it serves one customer. tenement runs a copy for each of them, routes requests by subdomain, and stops idle instances to save memory.
 
 ```
 alice.notes.example.com  ->  notes:alice  ->  isolated process + own database
 bob.notes.example.com    ->  notes:bob    ->  isolated process + own database
 ```
 
-Write single-tenant code. Deploy it for every customer.
-
 > Experimental. Actively developed. APIs may change.
 
-## Why not systemd?
+## Why this exists
 
-systemd runs processes. tenement runs *tenants*.
+The obvious tools don't quite fit here. systemd runs processes, but it doesn't route requests or stop idle ones. You'd need to write a unit file for each customer and wire up nginx yourself. Docker adds container overhead and image management you don't need for trusted code on one machine. Kubernetes is absurd for a $5 VPS.
+
+What you actually want is something like [Fly Machines](https://fly.io/docs/machines/) on your own hardware. Spawn a process, give it a subdomain, let it sleep when nobody's using it, wake it up on the next request. That's tenement.
 
 | | systemd | tenement |
 |---|---------|----------|
-| Routing | You configure nginx/caddy per service | `alice.notes.example.com` just works |
-| Scale to zero | No. Processes run forever | Idle processes stop, wake on first request |
-| Per-tenant data | You manage it | Each instance gets `{data_dir}/{id}/` automatically |
-| Spawn new tenant | Write a unit file, reload | `ten spawn notes:alice` |
-| Health + restart | Basic restart-on-failure | Health endpoint checks, exponential backoff, max restart limits |
-| Deployment | Rolling restart scripts | `ten deploy notes:v2` + `ten route notes --from v1 --to v2` |
-| Metrics | You set up prometheus exporters | Built-in per-tenant request counts and latencies |
-| Logs | journalctl | `ten logs notes:alice`, full-text search, SSE streaming |
-| Auth | N/A | Bearer token API with admin + tenant-scoped tokens |
+| Routing | You configure nginx per service | `alice.notes.example.com` just works |
+| Scale to zero | Processes run forever | Idle processes stop, wake on first request |
+| Per-tenant data | You manage it | Each instance gets its own data directory |
+| New customer | Write a unit file, reload | `ten spawn notes:alice` |
+| Health + restart | Basic restart-on-failure | HTTP health checks, exponential backoff |
+| Deployment | Rolling restart scripts | `ten deploy notes:v2` then `ten route --from v1 --to v2` |
+| Logs | journalctl | `ten logs notes:alice` with full-text search |
 
-tenement is for when you want Fly Machines on your own hardware. You have one server, many customers, and you want each one isolated without Kubernetes complexity.
+## Quick start
 
-## Install
+Install the CLI and start the server:
 
 ```bash
 cargo install tenement-cli
+ten serve --port 8080 --domain localhost
+ten token-gen
 ```
 
-## Quick Start
-
-**1. Write your app** (any language, read `PORT` from env):
+Here's a complete app. It's a notes API backed by SQLite, and it doesn't know anything about tenants. It just reads `PORT` from the environment and serves whoever's asking.
 
 ```python
 # app.py
@@ -82,7 +80,7 @@ class Handler(BaseHTTPRequestHandler):
 HTTPServer(("127.0.0.1", PORT), Handler).serve_forever()
 ```
 
-**2. Configure:**
+The config is six lines. You tell tenement what command to run, where the health endpoint is, and what environment variables to set. The `{id}` in `DATA_DIR` gets replaced with the tenant name at spawn time.
 
 ```toml
 # tenement.toml
@@ -96,152 +94,121 @@ isolation = "process"
 DATA_DIR = "{data_dir}/{id}"
 ```
 
-**3. Run:**
+Now spawn a couple tenants and try it:
 
 ```bash
-ten serve --port 8080 --domain localhost
-ten token-gen
 ten spawn notes:alice
 ten spawn notes:bob
 
-curl http://alice.notes.localhost:8080/notes   # alice's data
-curl http://bob.notes.localhost:8080/notes     # bob's data (separate)
-ten ps                                         # list instances
+curl -X POST http://alice.notes.localhost:8080/notes \
+  -H "Content-Type: application/json" -d '{"text":"hello from alice"}'
+
+curl http://alice.notes.localhost:8080/notes   # alice's notes
+curl http://bob.notes.localhost:8080/notes     # bob's notes (empty, different database)
+ten ps                                         # list running instances
 ```
 
-After 5 minutes idle, tenement stops the process. The next request wakes it automatically (sub-second).
+Alice and Bob each get their own process, their own SQLite database, their own data directory. After 5 minutes of no requests, tenement kills the process. The next request wakes it back up in under a second.
 
 ## How it works
 
-1. You define a **service** in `tenement.toml` (command, health endpoint, env vars)
-2. You **spawn instances** of that service (`ten spawn notes:alice`)
-3. tenement allocates a port, sets `PORT` and `DATA_DIR` env vars, starts the process
-4. Requests to `alice.notes.example.com` route to that instance
-5. Health checks run automatically; unhealthy instances restart with backoff
-6. Idle instances stop after the configured timeout, wake on the next request
+You define a service in your config (the command, health endpoint, and environment variables). When you spawn an instance, tenement allocates a TCP port, sets `PORT` in the environment, and starts the process. Requests to `alice.notes.example.com` get proxied to alice's port. tenement polls the health endpoint and restarts unhealthy instances with exponential backoff. When nobody's made a request for a while, it kills the process. When someone does, it spawns a fresh one.
 
-Your app handles its own auth, business logic, and data. tenement handles routing, lifecycle, and isolation.
+Your app handles its own auth, business logic, and data. tenement handles routing, lifecycle, and isolation. These two layers are completely independent, which means tenement doesn't touch your `Authorization` headers or care what framework you're using. You can verify this yourself with the [auth-test example](examples/auth-test/).
 
-## Features
+## The economics
 
-- **Subdomain routing** - `alice.notes.example.com` routes to `notes:alice`
-- **Scale-to-zero** - idle processes stop, wake on first request (sub-second)
-- **Per-tenant data** - each instance gets its own `{data_dir}/{id}/` directory
-- **Process isolation** - Linux namespace isolation (PID + mount), or bare process on macOS
-- **Health checks** - HTTP health endpoint checks with exponential backoff restart
-- **Process groups** - killing an instance kills all its child processes (no orphans)
-- **Shell command parsing** - `command = "uv run python app.py"` just works
-- **Weighted routing** - blue-green and canary deployments via traffic weights
-- **Built-in TLS** - Let's Encrypt certificates, or use Caddy as a reverse proxy
-- **Prometheus metrics** - per-tenant request counts and latencies at `/metrics`
-- **Log capture** - full-text search, SSE streaming, `ten logs` CLI
-- **Auth** - admin tokens for management API, tenant-scoped tokens for limited access
-- **TENEMENT_SERVER env var** - set once, skip `--server` on every CLI command
+Most SaaS customers aren't active simultaneously. If you have 1000 customers and only 20 are using the product at any given moment, the traditional approach keeps all 1000 processes running. That's 20GB of RAM across 10 machines at maybe $500/month. With tenement, the 980 idle instances cost nothing. You run 20 processes on one machine for $5/month. The wake-on-request latency is under a second, so users don't notice.
+
+This pairs well with SQLite. Each customer gets their own database file, replicated to S3 with something like [walrust](https://github.com/russellromney/walrust) or Litestream. No shared Postgres, no connection pooling, no schema migrations that touch everyone's data at once.
+
+## What's in the box
+
+Tenement does subdomain routing (`alice.api.example.com` routes to `api:alice`), scale-to-zero with wake-on-request, per-tenant data directories, process isolation via Linux namespaces, HTTP health checks with exponential backoff, weighted routing for blue-green and canary deployments, built-in TLS via Let's Encrypt, Prometheus metrics, log capture with full-text search, and a bearer token auth system for the management API with both admin and tenant-scoped tokens.
+
+Commands like `uv run python app.py` or `go run main.go` are shell-split automatically, and every instance runs in its own process group so killing it also kills any child processes. No orphans.
 
 ## CLI
 
 ```bash
-# Server
-ten serve --port 8080 --domain localhost
-ten init --name myapp
+ten serve --port 8080 --domain localhost    # start the server
+ten spawn notes:alice                       # create a tenant
+ten stop notes:alice                        # stop a tenant
+ten ps                                      # list everything
+ten logs notes:alice                        # tail logs
+ten logs -f                                 # follow all logs
+ten deploy notes:v2                         # deploy a new version
+ten route notes --from v1 --to v2           # blue-green swap
+ten weight notes:alice 50                   # canary: 50% traffic
+ten token-gen                               # admin API token
+ten token-gen --tenant alice                # scoped token for alice
+```
 
-# Instance management
-ten spawn notes:alice
-ten stop notes:alice
-ten restart notes:alice
-ten ps
-ten health notes:alice
+Set `TENEMENT_SERVER` to skip passing `--server` on every command:
 
-# Logs
-ten logs notes:alice
-ten logs -f                  # follow all
-
-# Deployment
-ten deploy notes:v2
-ten route notes --from v1 --to v2
-ten weight notes:alice 50    # canary: 50% traffic
-
-# Auth
-ten token-gen                # admin token
-ten token-gen --tenant alice # scoped token
-
-# Config
-ten config
-export TENEMENT_SERVER=http://localhost:9090  # skip --server on every command
+```bash
+export TENEMENT_SERVER=http://localhost:9090
+ten ps    # just works
 ```
 
 ## Configuration
 
 ```toml
 [settings]
-data_dir = "./data"              # global data dir (DB, tokens, per-instance dirs)
-health_check_interval = 10       # seconds between health checks
+data_dir = "./data"
 
 [service.api]
-command = "uv run python app.py" # shell-split automatically if no args field
-health = "/health"               # HTTP endpoint for health checks
-isolation = "process"            # "process" (macOS/Linux) or "namespace" (Linux)
-idle_timeout = 300               # stop after N seconds idle (0 = never)
-startup_timeout = 10             # seconds to wait for first health check (increase for go run)
-storage_persist = true           # keep data dir on stop
-memory_limit_mb = 256            # cgroups memory limit (Linux)
-cpu_shares = 100                 # cgroups CPU weight (Linux)
+command = "uv run python app.py"
+health = "/health"
+isolation = "process"            # "process" (macOS/Linux) or "namespace" (Linux, PID isolation)
+idle_timeout = 300               # stop after 5 min idle
+startup_timeout = 10             # increase for go run (30s)
+storage_persist = true           # keep data across restarts
+memory_limit_mb = 256            # cgroups limit (Linux)
 
 [service.api.env]
-DATA_DIR = "{data_dir}/{id}"     # interpolation: {name}, {id}, {data_dir}, {port}
+DATA_DIR = "{data_dir}/{id}"     # {name}, {id}, {data_dir}, {port} all interpolate
 ```
+
+Full reference at [tenement.dev/guides/03-configuration](https://tenement.dev/guides/03-configuration).
 
 ## Examples
 
-See [`examples/`](examples/) for complete working setups:
+The [examples/ directory](examples/) has complete working setups you can run immediately:
 
-| Example | What it shows |
-|---------|---------------|
-| [`hello-world`](examples/hello-world/) | Simplest possible setup (bash + netcat) |
-| [`python-fastapi`](examples/python-fastapi/) | FastAPI with per-tenant database |
-| [`node-fastify`](examples/node-fastify/) | Node.js Fastify server |
-| [`go-http`](examples/go-http/) | Go net/http server |
-| [`multi-tenant`](examples/multi-tenant/) | Per-tenant notes API with SQLite |
-| [`multi-runtime`](examples/multi-runtime/) | Python + Node + Go in one config, with test script |
-| [`multi-env`](examples/multi-env/) | Multiple services, environments, and isolation levels |
-| [`auth-test`](examples/auth-test/) | App-level auth passthrough (tenement doesn't touch your auth) |
-
-The `multi-runtime` example includes a 56-test integration script that verifies auth, data isolation, and cross-service isolation across all three runtimes.
+- [hello-world](examples/hello-world/) is the simplest possible setup, a bash script and netcat.
+- [python-fastapi](examples/python-fastapi/) and [node-fastify](examples/node-fastify/) and [go-http](examples/go-http/) show the same pattern in three languages.
+- [multi-runtime](examples/multi-runtime/) runs all three at once with a 56-test integration script that verifies auth, data isolation, and cross-service isolation.
+- [auth-test](examples/auth-test/) demonstrates that tenement passes all request headers through untouched, so your app's auth works exactly as it would without tenement.
+- [multi-tenant](examples/multi-tenant/) is a per-tenant notes API with SQLite, which is probably closest to what you'd actually build.
 
 ## Production
 
-For a single Hetzner/DigitalOcean VPS with wildcard HTTPS:
+For a Hetzner or DigitalOcean VPS with wildcard HTTPS:
 
 ```bash
-# DNS: *.app.example.com -> your server IP
-
+# Point *.app.example.com at your server IP, then:
 cargo install tenement-cli
 cd /opt/myapp
 ten init --name myapp --command "python3 app.py"
 ten token-gen
-
-# Install as systemd service with Caddy for HTTPS:
 ten install --domain app.example.com --caddy --dns-provider cloudflare
 
-# Manage tenants:
 ten spawn myapp:customer1
 ten spawn myapp:customer2
 ten ps
-ten logs -f
 ```
+
+The `ten install` command creates a systemd service and a Caddyfile with wildcard TLS. Caddy handles HTTPS, tenement handles everything else.
 
 ## Development
 
 ```bash
 cargo test    # 559 tests
-cargo bench   # benchmarks
+cargo bench
 ```
 
-See [ROADMAP.md](ROADMAP.md) for planned work and [CHANGELOG.md](CHANGELOG.md) for history.
-
-## Documentation
-
-Full docs at [tenement.dev](https://tenement.dev).
+Full docs at [tenement.dev](https://tenement.dev). See [ROADMAP.md](ROADMAP.md) for what's next.
 
 ## License
 

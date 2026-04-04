@@ -3,60 +3,33 @@ title: Why tenement?
 description: The problem tenement solves
 ---
 
-## The gap
+## The problem
 
-You have a side project you want to offer as SaaS. You want each customer to get their own process and database. You don't want to deal with multi-tenant database schemas.
+You're building something you want to offer as a service. Maybe it's a notes app, maybe it's an analytics dashboard, maybe it's an internal tool your company wants to white-label. The simplest architecture is one process and one database per customer. No shared state, no row-level security, no multi-tenant schema migrations. Each customer's data lives in its own SQLite file. The code is trivial to write and trivial to reason about.
 
-Your options:
+The hard part is running 500 copies of it on one server.
 
-- **systemd** - No routing, no idle timeout, managing 100+ unit files is painful
-- **Docker** - Container overhead, slower startup, overkill for trusted code on one server
-- **Kubernetes** - Control plane overhead exceeds the workloads on a small server
-- **Fly Machines** - Great, but you pay per machine and can't overstuff
+systemd can run processes, but it doesn't know about routing. You'd write a unit file for each customer, configure nginx to route subdomains, set up health checks, figure out log aggregation, and script your own deployments. When a customer churns, you clean up all of that manually. If you have 500 customers and only 30 are active at any moment, systemd keeps all 500 processes running anyway.
 
-tenement fills the gap: lightweight process management with routing, on a single server.
+Docker adds container overhead and image management that you don't need when you're running your own trusted code on your own server. Kubernetes is absurd for a single VPS. Fly Machines is the closest thing to what you want, but you're paying per machine and you can't overstuff them the way you can overstuff your own box.
 
-## Why not systemd?
-
-| | systemd | tenement |
-|---|---------|----------|
-| Routing | You configure nginx/caddy per service | `alice.notes.example.com` just works |
-| Scale to zero | No. Processes run forever | Idle processes stop, wake on first request |
-| Per-tenant data | You manage it | Each instance gets `{data_dir}/{id}/` automatically |
-| New tenant | Write a unit file, reload | `ten spawn notes:alice` |
-| Health + restart | Basic restart-on-failure | HTTP health endpoint checks, exponential backoff, max restart limits |
-| Deployment | Rolling restart scripts | `ten deploy notes:v2` + `ten route --from v1 --to v2` |
-| Metrics | You set up prometheus exporters | Built-in per-tenant request counts and latencies |
-| Logs | journalctl | `ten logs notes:alice`, full-text search, SSE streaming |
-| Auth | N/A | Bearer token API with admin + tenant-scoped tokens |
-| Process cleanup | Your problem | Process groups: kill an instance, kill all its children |
-
-systemd is a process manager. tenement is a tenant manager.
+tenement fills this gap. It's a process hypervisor that handles routing, lifecycle, health checks, and scale-to-zero for you. You write single-tenant code, and tenement handles the multiplexing.
 
 ## The economics
 
-Most SaaS customers aren't active simultaneously. You configure all of them, but only pay for what's running.
+Most SaaS customers aren't active simultaneously. If you have 1000 customers, maybe 20 are making requests right now. The other 980 haven't logged in today.
 
-```
-1000 tenants configured
-  20 actually running (active users right now)
- 980 sleeping (zero resources)
-```
+The traditional approach keeps all 1000 processes running. That's roughly 20GB of RAM across 10 machines, costing maybe $500/month. With tenement, the 980 idle customers cost nothing. Their processes are stopped. You're running 20 processes on one $5 VPS, and when customer #21 shows up, their process starts in under a second.
 
-Traditional approach: 1000 always-on processes = 20GB RAM = 10 machines @ $500/month.
+This is the same trick that makes serverless platforms economical, except you're running it on your own hardware. The difference is you keep the margin.
 
-tenement approach: 1000 configured, ~20 running = 400MB RAM = 1 machine @ $5/month.
+## Single-tenant code
 
-Wake-on-request latency: sub-second. Users don't notice.
-
-## Single-tenant code, multi-tenant deployment
-
-Write your app as if it serves one customer. No tenant ID checks, no row-level security, no shared database complexity.
+The key insight is that you don't change your code at all. Your app reads a database path from the environment and serves whoever's asking. It has no concept of tenants.
 
 ```python
 # app.py
-db_path = os.environ["DATA_DIR"] + "/app.db"
-# That's it. No tenant_id, no filtering, no RLS.
+db = sqlite3.connect(os.environ["DATA_DIR"] + "/app.db")
 ```
 
 ```toml
@@ -69,28 +42,25 @@ health = "/health"
 DATA_DIR = "{data_dir}/{id}"
 ```
 
-Each customer gets their own process, their own database, their own environment. tenement handles the multiplexing.
+When tenement spawns `api:alice`, it sets `DATA_DIR` to `/var/lib/tenement/api/alice` and starts the process. When it spawns `api:bob`, bob gets `/var/lib/tenement/api/bob`. Same code, different environment, complete isolation.
 
 ## Auth passthrough
 
-tenement does not touch your app's auth. Requests proxy through with all headers intact (including `Authorization`). Your app handles authentication however it wants: JWT, sessions, API keys.
+A reasonable question is how authentication works when tenement is proxying requests. The answer is that tenement doesn't touch your auth at all. Every request header, including `Authorization`, passes through to your process unchanged. Your app authenticates users however it normally would: JWT, sessions, API keys, cookies. tenement is invisible to your auth layer.
 
-tenement's own auth (Bearer tokens) is only for the management API (spawn, stop, deploy). See the [auth-test example](https://github.com/russellromney/tenement/tree/main/examples/auth-test) for a working demo.
+tenement has its own auth system, but it's only for the management API. The tokens that let you spawn and stop instances are completely separate from whatever your app uses to authenticate its users. You can see this working in the [auth-test example](https://github.com/russellromney/tenement/tree/main/examples/auth-test), which runs a Python API with its own bearer token auth through tenement and verifies that cross-tenant tokens are rejected by the app, not by tenement.
 
-## Pairs well with
+## Pairs well with SQLite
 
-**SQLite + WAL replication** (walrust, Litestream, LiteFS, etc.)
-
-Each customer gets their own SQLite database. Replicate to S3 for durability. No shared PostgreSQL, no connection pooling.
+Each customer gets their own database file. Replicate to S3 with something like [walrust](https://github.com/russellromney/walrust) or Litestream for durability. No shared Postgres, no connection pooling, no schema migrations that affect everyone at once.
 
 ```
 customer1.api.example.com -> api:customer1 -> /data/customer1/app.db
 customer2.api.example.com -> api:customer2 -> /data/customer2/app.db
 ```
 
+When you need to migrate a schema, you can roll it out to one customer at a time. If something breaks, only that customer is affected.
+
 ## What tenement is not
 
-- **Not a container runtime.** No images, no registries. Dependencies live on the host.
-- **Not multi-server.** Use slum for fleet orchestration.
-- **Not for untrusted code.** Use `isolation = "sandbox"` (gVisor) if you need syscall filtering.
-- **Not Kubernetes.** Single server, single config file.
+tenement is not a container runtime. There are no images and no registries. Your app's dependencies need to be installed on the host. It's not multi-server; for that, there's slum, a fleet orchestrator that coordinates multiple tenement instances. It's not for untrusted code by default, though you can use `isolation = "sandbox"` (gVisor) if you need syscall filtering. And it's not Kubernetes. It's one server, one config file, and a CLI.

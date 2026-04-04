@@ -3,79 +3,53 @@ title: tenement
 description: Process hypervisor for single-server deployments
 ---
 
-**Process hypervisor for single-server deployments.**
+You have a side project you want to sell as SaaS. Each customer should get their own process and their own database, because multi-tenant schemas are a nightmare. But you only have one server.
 
-Run 100+ isolated services on a single server. Each customer gets their own process. Spawn on demand, stop when idle, wake on first request.
+tenement is a process hypervisor that turns that one server into a multi-tenant platform. You write your app as if it serves one customer. tenement runs a copy for each of them, routes requests by subdomain, and stops idle instances to save memory.
 
 ```
 alice.notes.example.com  ->  notes:alice  ->  isolated process + own database
 bob.notes.example.com    ->  notes:bob    ->  isolated process + own database
 ```
 
-Write single-tenant code. Deploy it for every customer.
+## Why not just use systemd?
 
-## Why not systemd?
+systemd runs processes, but it doesn't route requests or stop idle ones. You'd need to write a unit file for each customer and wire up nginx yourself. If you want to add a new customer, that's a unit file, an nginx config block, and a reload. If you have 200 customers and only 10 are active at any time, systemd keeps all 200 processes running.
 
-systemd runs processes. tenement runs *tenants*.
+tenement gives you what [Fly Machines](https://fly.io/docs/machines/) gives you, but on your own hardware. Spawn a process with one command, give it a subdomain automatically, let it sleep when nobody's using it, wake it up on the next request.
 
 | | systemd | tenement |
 |---|---------|----------|
 | Routing | You configure nginx per service | `alice.notes.example.com` just works |
-| Scale to zero | No | Idle processes stop, wake on first request |
-| Per-tenant data | You manage it | Each instance gets its own data dir |
-| Spawn tenant | Write a unit file, reload | `ten spawn notes:alice` |
+| Scale to zero | Processes run forever | Idle processes stop, wake on first request |
+| Per-tenant data | You manage it | Each instance gets its own data directory |
+| New customer | Write a unit file, reload | `ten spawn notes:alice` |
 | Health + restart | Basic restart-on-failure | HTTP health checks, exponential backoff |
-| Deployment | Rolling restart scripts | `ten deploy` + `ten route` (blue-green) |
-| Metrics | Set up exporters | Built-in per-tenant request counts |
-| Logs | journalctl | `ten logs notes:alice`, full-text search |
-
-tenement is for when you want [Fly Machines](https://fly.io/docs/machines/) on your own hardware.
+| Deployment | Rolling restart scripts | `ten deploy notes:v2` then `ten route --from v1 --to v2` |
+| Logs | journalctl | `ten logs notes:alice` with full-text search |
 
 ## Get started
 
 ```bash
 cargo install tenement-cli
-ten serve --port 8080 --domain localhost
-ten token-gen
-ten spawn api:prod
-curl http://prod.api.localhost:8080/
 ```
 
-See the [Quick Start](/intro/01-quick-start) for a complete walkthrough, or jump to the [examples](https://github.com/russellromney/tenement/tree/main/examples).
+The [Quick Start](/intro/01-quick-start) walks through a complete example, from writing an app to spawning tenants to watching them scale to zero.
 
-## Features
+If you'd rather read code, the [examples](https://github.com/russellromney/tenement/tree/main/examples) directory has working setups in Python, Node.js, and Go that you can run immediately. The [multi-runtime example](https://github.com/russellromney/tenement/tree/main/examples/multi-runtime) runs all three at once and includes a 56-test integration script.
 
-- **Subdomain routing** - `alice.api.example.com` routes to `api:alice`
-- **Scale-to-zero** - idle processes stop, wake on first request (sub-second)
-- **Per-tenant data** - each instance gets `{data_dir}/{id}/`
-- **Process isolation** - Linux namespaces (zero overhead) or gVisor sandbox
-- **Health checks** - HTTP endpoint checks with exponential backoff
-- **Process groups** - kill an instance, kill all its children (no orphans)
-- **Shell command parsing** - `command = "uv run python app.py"` just works
-- **Weighted routing** - blue-green and canary deployments
-- **Built-in TLS** - Let's Encrypt certificates
-- **Auth** - admin tokens + tenant-scoped tokens
-- **Prometheus metrics** - per-tenant request counts and latencies
-- **Log capture** - full-text search, SSE streaming, CLI
+## What's in the box
 
-## Examples
+tenement does subdomain routing, scale-to-zero with wake-on-request, per-tenant data directories, process isolation via Linux namespaces, HTTP health checks with exponential backoff, weighted routing for blue-green and canary deployments, built-in TLS via Let's Encrypt, Prometheus metrics, log capture with full-text search, and bearer token auth for the management API.
 
-| Example | What it shows |
-|---------|---------------|
-| [hello-world](https://github.com/russellromney/tenement/tree/main/examples/hello-world) | Simplest setup (bash + netcat) |
-| [python-fastapi](https://github.com/russellromney/tenement/tree/main/examples/python-fastapi) | FastAPI with per-tenant database |
-| [node-fastify](https://github.com/russellromney/tenement/tree/main/examples/node-fastify) | Node.js Fastify server |
-| [go-http](https://github.com/russellromney/tenement/tree/main/examples/go-http) | Go net/http server |
-| [multi-runtime](https://github.com/russellromney/tenement/tree/main/examples/multi-runtime) | Python + Node + Go in one config, 56-test integration script |
-| [auth-test](https://github.com/russellromney/tenement/tree/main/examples/auth-test) | App-level auth passthrough |
-| [multi-tenant](https://github.com/russellromney/tenement/tree/main/examples/multi-tenant) | Per-tenant notes API with SQLite |
+It doesn't touch your app's auth. All request headers, including `Authorization`, pass through to your process untouched. Your app handles authentication however it wants.
 
 ## Docs
 
-- [Quick Start](/intro/01-quick-start) - Installation and first spawn
-- [Why tenement?](/intro/02-economics) - The problem it solves
-- [Concepts](/intro/03-concepts) - Architecture and terminology
-- [Configuration](/guides/03-configuration) - Full TOML reference
-- [Production](/guides/04-production) - TLS, systemd, Caddy
-- [Deployment Patterns](/guides/05-deployments) - Blue-green, canary
-- [Troubleshooting](/reference/troubleshooting) - Common issues
+- [Quick Start](/intro/01-quick-start) walks through writing an app, configuring tenement, and spawning your first tenants.
+- [Why tenement?](/intro/02-economics) explains the problem in more detail and the economics of running mostly-idle tenants.
+- [Concepts](/intro/03-concepts) covers how tenement works internally: the request flow, instance lifecycle, health checks, and the auth model.
+- [Configuration](/guides/03-configuration) is the full TOML reference.
+- [Production](/guides/04-production) covers TLS, systemd, and Caddy for real deployments.
+- [Deployment Patterns](/guides/05-deployments) covers blue-green swaps and canary rollouts.
+- [Troubleshooting](/reference/troubleshooting) has solutions for common issues.
