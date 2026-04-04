@@ -151,6 +151,7 @@ jobs:
       - name: Publish tenement lib
         env:
           SOUP_TOKEN: ${{ secrets.SOUP_TOKEN }}
+          SOUP_ORG: russellromney
         run: |
           ~/.soup/bin/soup run --project tenement --env development -- \
             cargo publish -p tenement --allow-dirty
@@ -161,6 +162,7 @@ jobs:
       - name: Publish tenement-cli
         env:
           SOUP_TOKEN: ${{ secrets.SOUP_TOKEN }}
+          SOUP_ORG: russellromney
         run: |
           ~/.soup/bin/soup run --project tenement --env development -- \
             cargo publish -p tenement-cli --allow-dirty
@@ -194,6 +196,7 @@ jobs:
       - name: Deploy to Cloudflare Pages
         env:
           SOUP_TOKEN: ${{ secrets.SOUP_TOKEN }}
+          SOUP_ORG: russellromney
         run: |
           ~/.soup/bin/soup run --project tenement --env development -- \
             npx wrangler pages deploy website/dist --project-name tenement
