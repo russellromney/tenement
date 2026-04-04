@@ -63,4 +63,4 @@ When you need to migrate a schema, you can roll it out to one customer at a time
 
 ## What tenement is not
 
-tenement is not a container runtime. There are no images and no registries. Your app's dependencies need to be installed on the host. It's not multi-server; for that, there's slum, a fleet orchestrator that coordinates multiple tenement instances. It's not for untrusted code by default, though you can use `isolation = "sandbox"` (gVisor) if you need syscall filtering. And it's not Kubernetes. It's one server, one config file, and a CLI.
+tenement is not a container runtime. There are no images and no registries. Your app's dependencies need to be installed on the host. It's not multi-server, though slum (experimental) is a fleet orchestrator that will coordinate multiple tenement instances. It's not for untrusted code by default, though you can use `isolation = "sandbox"` (gVisor) if you need syscall filtering. And it's not Kubernetes. It's one server, one config file, and a CLI.

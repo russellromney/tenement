@@ -21,7 +21,7 @@ otlp = ["tracing-opentelemetry", "opentelemetry", "opentelemetry_sdk", "opentele
 http3 = ["h3", "h3-quinn", "quinn"]
 
 [dependencies]
-tenement = { path = "../tenement" }
+tenement = { version = "0.2.0", path = "../tenement" }
 clap.workspace = true
 tokio.workspace = true
 anyhow.workspace = true

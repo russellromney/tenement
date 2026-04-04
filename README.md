@@ -208,7 +208,7 @@ The `ten install` command creates a systemd service and a Caddyfile with wildcar
 ## Development
 
 ```bash
-cargo test    # 559 tests
+cargo test    # 566 tests
 cargo bench
 ```
 
