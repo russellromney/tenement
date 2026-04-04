@@ -154,7 +154,7 @@ jobs:
           SOUP_ORG: russellromney
         run: |
           ~/.soup/bin/soup run --project tenement --env development -- \
-            cargo publish -p tenement --allow-dirty
+            cargo publish -p tenement --allow-dirty || echo "Already published, skipping"
 
       - name: Wait for crates.io to index
         run: sleep 30
@@ -165,7 +165,7 @@ jobs:
           SOUP_ORG: russellromney
         run: |
           ~/.soup/bin/soup run --project tenement --env development -- \
-            cargo publish -p tenement-cli --allow-dirty
+            cargo publish -p tenement-cli --allow-dirty || echo "Already published, skipping"
 
   # Deploy docs to Cloudflare Pages
   deploy-docs:

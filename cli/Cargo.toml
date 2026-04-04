@@ -21,7 +21,7 @@ otlp = ["tracing-opentelemetry", "opentelemetry", "opentelemetry_sdk", "opentele
 http3 = ["h3", "h3-quinn", "quinn"]
 
 [dependencies]
-tenement = { version = "0.2.0", path = "../tenement" }
+tenement = { version = "0.2.1", path = "../tenement" }
 clap.workspace = true
 tokio.workspace = true
 anyhow.workspace = true
@@ -44,7 +44,7 @@ tokio-stream = { version = "0.1", features = ["sync"] }
 rust-embed.workspace = true
 mime_guess.workspace = true
 hyperlocal = "0.9"
-reqwest = { version = "0.12", features = ["json", "stream"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
 urlencoding = "2"
 rustls.workspace = true
 tokio-rustls.workspace = true
