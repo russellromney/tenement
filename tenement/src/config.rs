@@ -135,7 +135,20 @@ impl Default for Settings {
 }
 
 fn default_data_dir() -> PathBuf {
-    PathBuf::from("/var/lib/tenement")
+    PathBuf::from("./tenement-data")
+}
+
+/// Reject paths that start with a literal `~`. We don't expand tilde, and a
+/// literal `~/foo` directory is almost never what the user wants.
+fn reject_tilde(path: &Path, source: &str) -> Result<()> {
+    if path.to_string_lossy().starts_with('~') {
+        anyhow::bail!(
+            "{} path {:?} starts with '~'. Tilde is not expanded; \
+             pass an absolute path (e.g. $HOME/.local/share/tenement) instead.",
+            source, path
+        );
+    }
+    Ok(())
 }
 
 fn default_health_interval() -> u64 {
@@ -326,6 +339,30 @@ impl Config {
     pub fn load() -> Result<Self> {
         let config_path = Self::find_config_file()?;
         Self::load_from_path(&config_path)
+    }
+
+    /// Load config and optionally replace `settings.data_dir`.
+    ///
+    /// Used by the CLI to apply the `--data-dir` flag (or `TENEMENT_DATA_DIR`).
+    /// Precedence: override arg > value in tenement.toml > built-in default.
+    pub fn load_with_override(data_dir_override: Option<PathBuf>) -> Result<Self> {
+        let mut config = Self::load()?;
+        config.apply_data_dir_override(data_dir_override)?;
+        Ok(config)
+    }
+
+    /// Apply a `--data-dir` override on top of an already-loaded config.
+    ///
+    /// Both the override and any toml-supplied data_dir must not start with `~`
+    /// (no tilde expansion is performed; reject early so users see a clear error
+    /// instead of a literal `~` directory being created).
+    pub fn apply_data_dir_override(&mut self, data_dir_override: Option<PathBuf>) -> Result<()> {
+        reject_tilde(&self.settings.data_dir, "data_dir in tenement.toml")?;
+        if let Some(dir) = data_dir_override {
+            reject_tilde(&dir, "--data-dir")?;
+            self.settings.data_dir = dir;
+        }
+        Ok(())
     }
 
     /// Load config from a specific path
@@ -599,7 +636,7 @@ command = "./api"
 "#;
         let config = Config::from_str(config_str).unwrap();
 
-        assert_eq!(config.settings.data_dir, PathBuf::from("/var/lib/tenement"));
+        assert_eq!(config.settings.data_dir, PathBuf::from("./tenement-data"));
         assert_eq!(config.settings.health_check_interval, 10);
         assert_eq!(config.settings.max_restarts, 3);
         assert_eq!(config.settings.restart_window, 300);
@@ -768,6 +805,95 @@ command = "./api"
 
         let result = Config::load_from_path(&config_path);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_apply_data_dir_override_no_override_keeps_default() {
+        let mut config = Config::from_str("[service.api]\ncommand = \"./api\"\n").unwrap();
+        assert_eq!(config.settings.data_dir, PathBuf::from("./tenement-data"));
+
+        config.apply_data_dir_override(None).unwrap();
+        assert_eq!(config.settings.data_dir, PathBuf::from("./tenement-data"));
+    }
+
+    #[test]
+    fn test_apply_data_dir_override_no_override_keeps_toml_value() {
+        let toml = r#"
+[settings]
+data_dir = "/opt/tenement"
+[service.api]
+command = "./api"
+"#;
+        let mut config = Config::from_str(toml).unwrap();
+
+        config.apply_data_dir_override(None).unwrap();
+        assert_eq!(config.settings.data_dir, PathBuf::from("/opt/tenement"));
+    }
+
+    #[test]
+    fn test_apply_data_dir_override_replaces_default() {
+        let mut config = Config::from_str("[service.api]\ncommand = \"./api\"\n").unwrap();
+
+        config
+            .apply_data_dir_override(Some(PathBuf::from("/tmp/x")))
+            .unwrap();
+        assert_eq!(config.settings.data_dir, PathBuf::from("/tmp/x"));
+    }
+
+    #[test]
+    fn test_apply_data_dir_override_beats_toml_value() {
+        let toml = r#"
+[settings]
+data_dir = "/opt/tenement"
+[service.api]
+command = "./api"
+"#;
+        let mut config = Config::from_str(toml).unwrap();
+
+        config
+            .apply_data_dir_override(Some(PathBuf::from("/tmp/from-flag")))
+            .unwrap();
+        assert_eq!(config.settings.data_dir, PathBuf::from("/tmp/from-flag"));
+    }
+
+    #[test]
+    fn test_apply_data_dir_override_rejects_tilde_in_flag() {
+        let mut config = Config::from_str("[service.api]\ncommand = \"./api\"\n").unwrap();
+
+        let err = config
+            .apply_data_dir_override(Some(PathBuf::from("~/foo")))
+            .unwrap_err();
+        let msg = format!("{:#}", err);
+        assert!(msg.contains("--data-dir"), "got: {}", msg);
+        assert!(msg.contains("~"), "got: {}", msg);
+        // Original data_dir is unchanged.
+        assert_eq!(config.settings.data_dir, PathBuf::from("./tenement-data"));
+    }
+
+    #[test]
+    fn test_apply_data_dir_override_rejects_tilde_in_toml() {
+        let toml = r#"
+[settings]
+data_dir = "~/tenement"
+[service.api]
+command = "./api"
+"#;
+        let mut config = Config::from_str(toml).unwrap();
+
+        let err = config.apply_data_dir_override(None).unwrap_err();
+        let msg = format!("{:#}", err);
+        assert!(msg.contains("tenement.toml"), "got: {}", msg);
+    }
+
+    #[test]
+    fn test_apply_data_dir_override_user_tilde_form_rejected() {
+        // ~user/foo style is also rejected (we don't know how to resolve it).
+        let mut config = Config::from_str("[service.api]\ncommand = \"./api\"\n").unwrap();
+
+        let err = config
+            .apply_data_dir_override(Some(PathBuf::from("~russell/foo")))
+            .unwrap_err();
+        assert!(format!("{:#}", err).contains("--data-dir"));
     }
 
     #[test]
