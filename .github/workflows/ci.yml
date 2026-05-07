@@ -1,0 +1,97 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  fmt:
+    name: Format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all -- --check
+
+  clippy:
+    name: Clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Setup Node (for dashboard)
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: dashboard/package-lock.json
+      - name: Build dashboard (required by cli crate)
+        working-directory: dashboard
+        run: |
+          npm ci
+          npm run build
+      - name: Copy dashboard dist into CLI crate
+        run: cp -r dashboard/dist cli/dashboard-dist
+      - run: cargo clippy --workspace --all-targets
+
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Setup Node (for dashboard)
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: dashboard/package-lock.json
+      - name: Build dashboard (required by cli crate)
+        working-directory: dashboard
+        run: |
+          npm ci
+          npm run build
+      - name: Copy dashboard dist into CLI crate
+        run: cp -r dashboard/dist cli/dashboard-dist
+      - name: Build workspace
+        run: cargo build --workspace --all-targets
+      - name: Run tests
+        run: cargo test --workspace
+
+  e2e:
+    name: E2E (spawn + proxy)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Setup Node (for dashboard)
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: dashboard/package-lock.json
+      - name: Build dashboard (required by cli crate)
+        working-directory: dashboard
+        run: |
+          npm ci
+          npm run build
+      - name: Copy dashboard dist into CLI crate
+        run: cp -r dashboard/dist cli/dashboard-dist
+      - name: Build ten binary (debug — faster than release for CI smoke)
+        run: cargo build -p tenement-cli --bin ten
+      - name: Run E2E script
+        env:
+          TEN_BIN: ./target/debug/ten
+        run: ./scripts/e2e.sh
