@@ -1066,20 +1066,48 @@ async fn proxy_to_instance(
             }
         }
         None => {
-            // Weighted routing across all instances
-            match state.hypervisor.select_weighted(process).await {
-                Some(info) => {
-                    // Touch activity for the selected instance
+            // Weighted routing across all instances. If the chosen instance
+            // happens to have a dead socket, retry select_weighted while
+            // tracking which ids we've already probed, so repeated random
+            // picks of the same dead backend don't burn the request.
+            let candidates = state.hypervisor.list_by_process(process).await;
+            let total = candidates.len();
+            let mut tried: std::collections::HashSet<String> = std::collections::HashSet::new();
+            let mut chosen: Option<(ProxyTarget, String)> = None;
+            // Bound at total + small slack: select_weighted is random, so we
+            // may need a couple of extra rolls to cover every distinct id.
+            for _ in 0..(total * 3 + 1) {
+                let Some(info) = state.hypervisor.select_weighted(process).await else {
+                    break;
+                };
+                if !tried.insert(info.id.id.clone()) {
+                    continue; // already probed; reroll
+                }
+                let candidate = ProxyTarget {
+                    socket: info.socket.clone(),
+                    port: info.port,
+                };
+                if candidate.probe().await {
                     state.hypervisor.touch_activity(process, &info.id.id).await;
-                    resolved_instance_id = Some(info.id.id.clone());
-                    ProxyTarget {
-                        socket: info.socket,
-                        port: info.port,
-                    }
+                    chosen = Some((candidate, info.id.id.clone()));
+                    break;
+                }
+                tracing::warn!(
+                    "Weighted pick {}:{} is unreachable; trying another instance",
+                    process,
+                    info.id.id
+                );
+                if tried.len() >= total {
+                    break; // probed every distinct backend
+                }
+            }
+            match chosen {
+                Some((target, id)) => {
+                    resolved_instance_id = Some(id);
+                    target
                 }
                 None => {
-                    // No instances available - return 503
-                    tracing::debug!("No instances available for process '{}'", process);
+                    tracing::debug!("No reachable instances for process '{}'", process);
                     return (
                         StatusCode::SERVICE_UNAVAILABLE,
                         "Service temporarily unavailable",
