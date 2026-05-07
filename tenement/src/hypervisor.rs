@@ -452,10 +452,10 @@ impl Hypervisor {
                     let alive = true;
 
                     if !alive {
-                        // Check if instance was intentionally stopped (removed from map)
+                        // Check if this specific PID is still tracked
                         let still_tracked = {
                             let map = instances_ref.read().await;
-                            map.contains_key(&exit_instance_id)
+                            map.get(&exit_instance_id).map(|i| i.handle.pid()) == Some(Some(pid))
                         };
                         if still_tracked {
                             error!(

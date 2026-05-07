@@ -78,6 +78,12 @@ pub fn create_router(state: AppState) -> Router {
     Router::new()
         // Dashboard/API routes (root domain)
         .route("/", get(dashboard))
+        .route("/_overview", get(overview_partial))
+        .route("/_instances", get(instances_partial))
+        .route("/_logs", get(logs_partial))
+        .route("/login", get(login_page).post(handle_login))
+        .route("/instances", get(instances_page))
+        .route("/logs", get(logs_page))
         .route("/health", get(health))
         .route("/metrics", get(metrics_endpoint))
         .route("/api/telemetry", get(telemetry_endpoint))
@@ -93,8 +99,6 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/logs", get(query_logs))
         .route("/api/logs/stream", get(stream_logs))
         .route("/api/tls/status", get(tls_status_endpoint))
-        // Dashboard static assets
-        .route("/assets/*path", get(dashboard_asset))
         // Fallback handles subdomain routing (for non-subdomain 404s)
         .fallback(handle_request)
         // Middleware layers are applied inside-out:
@@ -192,24 +196,54 @@ async fn auth_middleware(
     let path = req.uri().path();
 
     // Skip auth for public endpoints
-    if path == "/health" || path == "/metrics" || path == "/api/telemetry" || path == "/" || path.starts_with("/assets/") {
+    if path == "/health" || path == "/metrics" || path == "/api/telemetry" || path == "/login" || path.starts_with("/assets/") {
+        return Ok(next.run(req).await);
+    }
+
+    // Skip auth for HTML page routes - they use cookie-based auth handled in the handler
+    if path == "/" || path == "/instances" || path == "/logs" || path.starts_with("/_") {
         return Ok(next.run(req).await);
     }
 
     // Subdomain requests are handled by subdomain_middleware before reaching here
     // so we don't need to check for subdomains in auth
 
-    // Extract token from Authorization header
+    // Extract token from Authorization header or cookie
     let auth_header = req
         .headers()
         .get("authorization")
         .and_then(|v| v.to_str().ok());
 
-    let token = match auth_header {
-        Some(h) if h.to_lowercase().starts_with("bearer ") => &h[7..],
+    let token: String = match auth_header {
+        Some(h) if h.to_lowercase().starts_with("bearer ") => h[7..].to_string(),
         _ => {
-            tracing::debug!("Missing or invalid Authorization header");
-            return Err(StatusCode::UNAUTHORIZED);
+            // Try cookie as fallback
+            match req.headers().get(axum::http::header::COOKIE) {
+                Some(cookie_val) => {
+                    let cookie_str = cookie_val.to_str().unwrap_or("");
+                    let mut found_token = None;
+                    for cookie in cookie_str.split(';') {
+                        let cookie = cookie.trim();
+                        if let Some((k, v)) = cookie.split_once('=') {
+                            if k.trim() == "tenement_token" {
+                                found_token = Some(v.to_string());
+                                break;
+                            }
+                        }
+                    }
+                    match found_token {
+                        Some(t) => t,
+                        None => {
+                            tracing::debug!("Missing or invalid Authorization header and no cookie");
+                            return Err(StatusCode::UNAUTHORIZED);
+                        }
+                    }
+                }
+                None => {
+                    tracing::debug!("Missing or invalid Authorization header and no cookie");
+                    return Err(StatusCode::UNAUTHORIZED);
+                }
+            }
         }
     };
 
@@ -230,7 +264,7 @@ async fn auth_middleware(
 
     // Try admin token first
     let token_store = TokenStore::new(&state.config_store);
-    match token_store.verify(token).await {
+    match token_store.verify(&token).await {
         Ok(true) => {
             let mut failures = state.auth_failures.write().await;
             *failures = (0, None);
@@ -246,7 +280,7 @@ async fn auth_middleware(
     }
 
     // Try tenant token
-    match state.tenant_tokens.verify(token).await {
+    match state.tenant_tokens.verify(&token).await {
         Ok(Some(tenant_id)) => {
             let mut failures = state.auth_failures.write().await;
             *failures = (0, None);
@@ -494,14 +528,364 @@ async fn serve_http_redirect(http_port: u16, https_port: u16) -> Result<()> {
     Ok(())
 }
 
-/// Serve dashboard
-async fn dashboard() -> impl IntoResponse {
-    crate::dashboard::serve_asset("").await
+/// Extract a cookie value by name from headers
+fn extract_cookie<'a>(headers: &'a axum::http::HeaderMap, name: &str) -> String {
+    let cookie_header = headers.get(axum::http::header::COOKIE);
+    match cookie_header {
+        Some(val) => {
+            let val = val.to_str().unwrap_or("");
+            for cookie in val.split(';') {
+                let cookie = cookie.trim();
+                if let Some((k, v)) = cookie.split_once('=') {
+                    if k.trim() == name {
+                        return v.to_string();
+                    }
+                }
+            }
+            String::new()
+        }
+        None => String::new(),
+    }
 }
 
-/// Serve dashboard assets
-async fn dashboard_asset(axum::extract::Path(path): axum::extract::Path<String>) -> impl IntoResponse {
-    crate::dashboard::serve_asset(&path).await
+/// Dashboard overview page
+async fn dashboard(
+    State(state): State<AppState>,
+    req: Request<Body>,
+) -> Response {
+    let token = extract_cookie(req.headers(), "tenement_token");
+    if token.is_empty() {
+        return (StatusCode::SEE_OTHER, [(axum::http::header::LOCATION, "/login")]).into_response();
+    }
+
+    let (instances, summary, error) = match fetch_dashboard_data(&state, &token).await {
+        Ok(data) => data,
+        Err(e) => (vec![], None, Some(e)),
+    };
+
+    let tmpl = crate::dashboard::OverviewTemplate {
+        auth_token: &token,
+        summary,
+        active_tab: "overview",
+        instances,
+        error,
+    };
+    axum::response::Html(tmpl.to_string()).into_response()
+}
+
+/// Login page
+async fn login_page(query: Option<axum::extract::Query<std::collections::HashMap<String, String>>>) -> impl IntoResponse {
+    let error = query.as_ref().and_then(|q| q.get("error").cloned());
+    let tmpl = crate::dashboard::LoginTemplate { error };
+    axum::response::Html(tmpl.to_string())
+}
+
+/// Handle login form submission
+async fn handle_login(
+    State(state): State<AppState>,
+    form: axum::Form<std::collections::HashMap<String, String>>,
+) -> impl IntoResponse {
+    let token = form.get("token").cloned().unwrap_or_default();
+    if token.is_empty() {
+        return (StatusCode::SEE_OTHER, [(axum::http::header::LOCATION, "/login?error=Token+required")]).into_response();
+    }
+
+    // Verify the token
+    let token_store = tenement::TokenStore::new(&state.config_store);
+    match token_store.verify(&token).await {
+        Ok(true) => {
+            // Set HTTP-only cookie and redirect
+            let cookie_header = format!("tenement_token={}; Path=/; HttpOnly; SameSite=Strict; Max-Age=86400", token);
+            (
+                StatusCode::SEE_OTHER,
+                [
+                    (axum::http::header::LOCATION, "/"),
+                    (axum::http::header::SET_COOKIE, cookie_header.as_str()),
+                ],
+            ).into_response()
+        }
+        _ => {
+            (StatusCode::SEE_OTHER, [(axum::http::header::LOCATION, "/login?error=Invalid+token")]).into_response()
+        }
+    }
+}
+
+/// Instances page
+async fn instances_page(
+    State(state): State<AppState>,
+    req: Request<Body>,
+) -> impl IntoResponse {
+    let token = extract_cookie(req.headers(), "tenement_token");
+    let (instances, summary, error) = if token.is_empty() {
+        (vec![], None, None)
+    } else {
+        match fetch_dashboard_data(&state, &token).await {
+            Ok(data) => data,
+            Err(e) => (vec![], None, Some(e)),
+        }
+    };
+
+    let tmpl = crate::dashboard::InstancesTemplate {
+        auth_token: &token,
+        summary,
+        active_tab: "instances",
+        instances,
+        error,
+    };
+    axum::response::Html(tmpl.to_string())
+}
+
+/// Logs page
+async fn logs_page(
+    State(state): State<AppState>,
+    query: axum::extract::Query<std::collections::HashMap<String, String>>,
+    req: Request<Body>,
+) -> impl IntoResponse {
+    let token = extract_cookie(req.headers(), "tenement_token");
+    let filter_process = query.get("process").cloned().unwrap_or_default();
+    let filter_level = query.get("level").cloned().unwrap_or_default();
+    let search = query.get("search").cloned().unwrap_or_default();
+
+    let logs = if token.is_empty() {
+        vec![]
+    } else {
+        let limit: u32 = query.get("limit").and_then(|v| v.parse().ok()).unwrap_or(100);
+        match fetch_logs(&state, &token, &filter_process, &filter_level, &search, limit).await {
+            Ok(logs) => logs,
+            Err(_) => vec![],
+        }
+    };
+
+    let processes = if token.is_empty() {
+        vec![]
+    } else {
+        match fetch_process_list(&state, &token).await {
+            Ok(p) => p,
+            Err(_) => vec![],
+        }
+    };
+
+    let summary = if token.is_empty() {
+        None
+    } else {
+        fetch_summary(&state, &token).await.ok()
+    };
+
+    let tmpl = crate::dashboard::LogsTemplate {
+        auth_token: &token,
+        summary,
+        active_tab: "logs",
+        logs,
+        processes,
+        filter_process,
+        filter_level,
+        search,
+        error: None,
+    };
+    axum::response::Html(tmpl.to_string())
+}
+
+/// Partial: overview content only (for HTMX refresh)
+async fn overview_partial(
+    State(state): State<AppState>,
+    req: Request<Body>,
+) -> impl IntoResponse {
+    let token = extract_cookie(req.headers(), "tenement_token");
+    let (instances, summary, error) = if token.is_empty() {
+        (vec![], None, None)
+    } else {
+        match fetch_dashboard_data(&state, &token).await {
+            Ok(data) => data,
+            Err(e) => (vec![], None, Some(e)),
+        }
+    };
+
+    let tmpl = crate::dashboard::OverviewContentTemplate {
+        auth_token: &token,
+        summary,
+        active_tab: "overview",
+        instances,
+        error,
+    };
+    axum::response::Html(tmpl.to_string())
+}
+
+/// Partial: instances content only
+async fn instances_partial(
+    State(state): State<AppState>,
+    req: Request<Body>,
+) -> impl IntoResponse {
+    let token = extract_cookie(req.headers(), "tenement_token");
+    let (instances, summary, error) = if token.is_empty() {
+        (vec![], None, None)
+    } else {
+        match fetch_dashboard_data(&state, &token).await {
+            Ok(data) => data,
+            Err(e) => (vec![], None, Some(e)),
+        }
+    };
+
+    let tmpl = crate::dashboard::InstancesContentTemplate {
+        auth_token: &token,
+        summary,
+        active_tab: "instances",
+        instances,
+        error,
+    };
+    axum::response::Html(tmpl.to_string())
+}
+
+/// Partial: logs content only
+async fn logs_partial(
+    State(state): State<AppState>,
+    query: axum::extract::Query<std::collections::HashMap<String, String>>,
+    req: Request<Body>,
+) -> impl IntoResponse {
+    let token = extract_cookie(req.headers(), "tenement_token");
+    let filter_process = query.get("process").cloned().unwrap_or_default();
+    let filter_level = query.get("level").cloned().unwrap_or_default();
+    let search = query.get("search").cloned().unwrap_or_default();
+
+    let logs = if token.is_empty() {
+        vec![]
+    } else {
+        let limit: u32 = query.get("limit").and_then(|v| v.parse().ok()).unwrap_or(100);
+        match fetch_logs(&state, &token, &filter_process, &filter_level, &search, limit).await {
+            Ok(logs) => logs,
+            Err(_) => vec![],
+        }
+    };
+
+    let processes = if token.is_empty() {
+        vec![]
+    } else {
+        match fetch_process_list(&state, &token).await {
+            Ok(p) => p,
+            Err(_) => vec![],
+        }
+    };
+
+    let summary = if token.is_empty() {
+        None
+    } else {
+        fetch_summary(&state, &token).await.ok()
+    };
+
+    let tmpl = crate::dashboard::LogsContentTemplate {
+        auth_token: &token,
+        summary,
+        active_tab: "logs",
+        logs,
+        processes,
+        filter_process,
+        filter_level,
+        search,
+        error: None,
+    };
+    axum::response::Html(tmpl.to_string())
+}
+
+/// Fetch dashboard data from internal API
+async fn fetch_dashboard_data(
+    state: &AppState,
+    token: &str,
+) -> Result<(Vec<crate::dashboard::InstanceRow>, Option<crate::dashboard::SummaryData>, Option<String>), String> {
+    let instances = match fetch_instances(state, token).await {
+        Ok(i) => i,
+        Err(e) => return Err(e),
+    };
+    let summary = fetch_summary(state, token).await.ok();
+    Ok((instances, summary, None))
+}
+
+async fn fetch_instances(
+    state: &AppState,
+    _token: &str,
+) -> Result<Vec<crate::dashboard::InstanceRow>, String> {
+    let instances = state.hypervisor.list().await;
+    let mut rows = Vec::new();
+    for inst in instances {
+        rows.push(crate::dashboard::InstanceRow {
+            id: inst.id.to_string(),
+            health_badge: crate::dashboard::health_badge(&inst.health.to_string()).to_string(),
+            health_color: crate::dashboard::health_color(&inst.health.to_string()).to_string(),
+            requests_total: "-".to_string(),
+            avg_latency_ms: "-".to_string(),
+            uptime: crate::dashboard::format_duration(inst.uptime_secs),
+            idle: crate::dashboard::format_duration(inst.idle_secs),
+            restarts: inst.restarts.to_string(),
+            weight: "100".to_string(),
+            storage: crate::dashboard::format_bytes(inst.storage_used_bytes),
+            health: inst.health.to_string(),
+        });
+    }
+    Ok(rows)
+}
+
+async fn fetch_summary(
+    state: &AppState,
+    _token: &str,
+) -> Result<crate::dashboard::SummaryData, String> {
+    let instances = state.hypervisor.list().await;
+    let total_instances = instances.len();
+    let healthy_instances = instances.iter().filter(|i| i.health.to_string() == "healthy").count();
+    Ok(crate::dashboard::SummaryData {
+        total_instances,
+        healthy_instances,
+        total_requests: 0,
+    })
+}
+
+async fn fetch_logs(
+    state: &AppState,
+    _token: &str,
+    process: &str,
+    level: &str,
+    search: &str,
+    limit: u32,
+) -> Result<Vec<crate::dashboard::LogEntry>, String> {
+    let log_buffer = state.hypervisor.log_buffer();
+    let query = tenement::LogQuery {
+        process: if process.is_empty() { None } else { Some(process.to_string()) },
+        instance_id: None,
+        level: if level.is_empty() { None } else { Some(tenement::LogLevel::Stderr) },
+        search: if search.is_empty() { None } else { Some(search.to_string()) },
+        limit: Some(limit as usize),
+    };
+    let logs = log_buffer.query(&query).await;
+
+    let mut entries = Vec::new();
+    for log in logs {
+        let time = chrono::DateTime::from_timestamp(log.timestamp as i64, 0)
+            .map(|dt| dt.format("%H:%M:%S").to_string())
+            .unwrap_or_default();
+
+        let process_label = format!("{}:{}", log.process, log.instance_id);
+        let is_error = log.level == tenement::LogLevel::Stderr;
+        let level_label = if is_error { "ERR" } else { "OUT" };
+
+        entries.push(crate::dashboard::LogEntry {
+            time,
+            process: process_label,
+            level_label: level_label.to_string(),
+            is_error,
+            message: log.message,
+        });
+    }
+    Ok(entries)
+}
+
+async fn fetch_process_list(
+    state: &AppState,
+    token: &str,
+) -> Result<Vec<String>, String> {
+    let instances = fetch_instances(state, token).await?;
+    let mut processes: Vec<String> = instances.iter()
+        .map(|i| i.id.split(':').next().unwrap_or("").to_string())
+        .collect();
+    processes.sort();
+    processes.dedup();
+    Ok(processes)
 }
 
 /// Health check endpoint

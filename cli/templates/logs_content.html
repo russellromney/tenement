@@ -1,0 +1,32 @@
+<div style="margin-bottom: 1rem; display: flex; gap: 0.5rem; align-items: center;">
+    <form hx-get="/_logs" hx-target="main" hx-swap="innerHTML" style="display: flex; gap: 0.5rem; align-items: center;">
+        <select name="process" style="width: 140px;">
+            <option value="">All processes</option>
+            {% for p in processes %}
+            <option value="{{ p }}" {% if p.as_str() == filter_process.as_str() %}selected{% endif %}>{{ p }}</option>
+            {% endfor %}
+        </select>
+        <select name="level" style="width: 100px;">
+            <option value="">All levels</option>
+            <option value="stderr" {% if filter_level == "stderr" %}selected{% endif %}>Error</option>
+            <option value="stdout" {% if filter_level == "stdout" %}selected{% endif %}>Output</option>
+        </select>
+        <input type="text" name="search" placeholder="Search..." value="{{ search }}" style="width: 200px;" />
+        <button type="submit" class="btn">Filter</button>
+    </form>
+</div>
+
+<div style="background: #111; border: 1px solid #1a1a1a; border-radius: 0.5rem; padding: 0.75rem; font-family: 'SF Mono', 'Fira Code', monospace; font-size: 0.75rem; max-height: 600px; overflow-y: auto; line-height: 1.6;">
+    {% if logs.is_empty() %}
+    <span class="text-gray">No logs available</span>
+    {% else %}
+    {% for log in logs %}
+    <div style="padding: 0.125rem 0.25rem; border-radius: 0.25rem;" onmouseover="this.style.background='#1a1a1a'" onmouseout="this.style.background='transparent'">
+        <span class="text-gray">{{ log.time }}</span>
+        <span style="color: #60a5fa; margin-left: 0.5rem;">{{ log.process }}</span>
+        <span style="margin-left: 0.5rem; {% if log.is_error %}color: #f87171{% else %}color: #666{% endif %};">{{ log.level_label }}</span>
+        <span style="color: #ccc; margin-left: 0.5rem;">{{ log.message }}</span>
+    </div>
+    {% endfor %}
+    {% endif %}
+</div>

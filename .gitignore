@@ -39,6 +39,9 @@ dashboard/dist/
 *.db-wal
 *.db-shm
 
+# Tenement data directory
+tenement-data/
+
 # Firecracker (runtime artifacts)
 *.sock
 *.ext4
