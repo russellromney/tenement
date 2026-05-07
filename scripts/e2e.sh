@@ -279,9 +279,25 @@ proxy_curl() {
   curl -fsS -H "Host: ${host}" "http://127.0.0.1:${PORT}$@"
 }
 
-# Wait for an instance to appear / disappear from `ten ps`.
-wait_for_in_ps()    { wait_for "in ps: $1"     10 bash -c "ten ps | grep -q -- '$1'"; }
-wait_for_not_in_ps(){ wait_for "not in ps: $1" 10 bash -c "! ten ps | grep -q -- '$1'"; }
+# Wait for an instance to appear / disappear from `ten ps`. Inlined (rather
+# than delegating to wait_for) because the helper is a shell function and
+# shell functions are not visible to subshells spawned via `bash -c`.
+wait_for_in_ps() {
+  local id="$1" deadline=$(( $(date +%s) + 15 ))
+  while (( $(date +%s) < deadline )); do
+    if ten ps 2>/dev/null | grep -q -- "$id"; then return 0; fi
+    sleep 0.2
+  done
+  fail "timed out after 15s waiting for in ps: $id"
+}
+wait_for_not_in_ps() {
+  local id="$1" deadline=$(( $(date +%s) + 15 ))
+  while (( $(date +%s) < deadline )); do
+    if ! ten ps 2>/dev/null | grep -q -- "$id"; then return 0; fi
+    sleep 0.2
+  done
+  fail "timed out after 15s waiting for not in ps: $id"
+}
 
 # ----------------------------------------------------------------------------
 # Scenario 1 — basic spawn / proxy / stop
