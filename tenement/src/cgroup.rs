@@ -500,7 +500,6 @@ mod tests {
     #[cfg(target_os = "linux")]
     mod linux_tests {
         use super::*;
-        use tempfile::TempDir;
 
         // Note: These tests may require elevated privileges to actually create cgroups.
         // They're marked #[ignore] to prevent failures in CI without proper permissions.

@@ -93,7 +93,7 @@ mod non_linux_tests {
 #[cfg(target_os = "linux")]
 mod linux_tests {
     use super::*;
-    use common::wait_for_socket;
+    use common::{test_config_with_process, wait_for_socket};
     use tenement::Hypervisor;
 
     // ===================
