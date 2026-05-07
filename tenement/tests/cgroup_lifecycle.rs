@@ -657,7 +657,6 @@ fn test_cgroups_v2_detection() {
     );
 
     // This test just verifies the detection logic runs without error
-    assert!(true);
 }
 
 #[test]
