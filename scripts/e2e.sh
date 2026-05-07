@@ -402,12 +402,16 @@ test_restart_on_crash() {
   log "killing pid ${pid_before}"
   kill -9 "${pid_before}" 2>/dev/null || fail "kill -9 ${pid_before} failed"
 
-  # Tenement detects the dead process at the next health check
-  # (interval=1s) and respawns. Allow generous time for CI.
-  wait_for "post-crash 200" 30 \
-    curl -fsS -H "Host: one.crash.${DOMAIN}" "http://127.0.0.1:${PORT}/"
+  # The proxy now blocks briefly while the hypervisor's health checker
+  # respawns the dead process, so a single request right after the kill
+  # should still succeed (no 502s for the client) — provided we give it
+  # a generous timeout for the whole round-trip.
+  log "single curl right after kill — proxy must wait, not 502"
+  local after
+  after="$(curl -fsS --max-time 30 \
+    -H "Host: one.crash.${DOMAIN}" "http://127.0.0.1:${PORT}/")" \
+    || fail "single curl after kill returned non-2xx — proxy retry didn't kick in"
 
-  local after; after="$(proxy_curl "one.crash.${DOMAIN}" /)"
   local pid_after; pid_after="$(grep -oE 'pid=[0-9]+' <<<"${after}" | cut -d= -f2)"
   log "after crash: pid=${pid_after}"
   [[ -n "${pid_after}" ]] || fail "could not parse pid post-restart from: ${after}"
