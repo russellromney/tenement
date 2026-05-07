@@ -21,6 +21,10 @@ struct Cli {
     #[arg(long, global = true)]
     token: Option<String>,
 
+    /// Data directory for tenement state (DB, tokens, certs). Overrides data_dir in tenement.toml.
+    #[arg(long, global = true, env = "TENEMENT_DATA_DIR")]
+    data_dir: Option<PathBuf>,
+
     #[command(subcommand)]
     command: Commands,
 }
@@ -190,11 +194,11 @@ async fn main() -> Result<()> {
 
     match cli.command {
         Commands::Serve { port, domain, tls, email, staging } => {
-            cmd_serve(port, domain, tls, email, staging).await?;
+            cmd_serve(port, domain, tls, email, staging, cli.data_dir).await?;
         }
         Commands::Spawn { instance } => {
             let (process, id) = parse_instance(&instance)?;
-            let client = ApiClient::from_args(&cli.server, cli.token)?;
+            let client = ApiClient::from_args(&cli.server, cli.token, cli.data_dir.as_deref())?;
             let resp = client.spawn(&process, &id).await?;
             println!("Spawned {}", resp.instance);
             if let Some(port) = resp.port {
@@ -202,17 +206,17 @@ async fn main() -> Result<()> {
             }
         }
         Commands::Stop { instance } => {
-            let client = ApiClient::from_args(&cli.server, cli.token)?;
+            let client = ApiClient::from_args(&cli.server, cli.token, cli.data_dir.as_deref())?;
             client.stop(&instance).await?;
             println!("Stopped {}", instance);
         }
         Commands::Restart { instance } => {
-            let client = ApiClient::from_args(&cli.server, cli.token)?;
+            let client = ApiClient::from_args(&cli.server, cli.token, cli.data_dir.as_deref())?;
             let resp = client.restart(&instance).await?;
             println!("Restarted {}", resp.instance);
         }
         Commands::Ps => {
-            let client = ApiClient::from_args(&cli.server, cli.token)?;
+            let client = ApiClient::from_args(&cli.server, cli.token, cli.data_dir.as_deref())?;
             let instances = client.list().await?;
             if instances.is_empty() {
                 println!("No running instances");
@@ -245,19 +249,19 @@ async fn main() -> Result<()> {
             }
         }
         Commands::Health { instance } => {
-            let client = ApiClient::from_args(&cli.server, cli.token)?;
+            let client = ApiClient::from_args(&cli.server, cli.token, cli.data_dir.as_deref())?;
             let resp = client.health(&instance).await?;
             let health = resp["health"].as_str().unwrap_or("unknown");
             println!("{}: {}", instance, health);
         }
         Commands::Weight { instance, weight } => {
-            let client = ApiClient::from_args(&cli.server, cli.token)?;
+            let client = ApiClient::from_args(&cli.server, cli.token, cli.data_dir.as_deref())?;
             let resp = client.set_weight(&instance, weight).await?;
             println!("Set {} weight to {}", resp.instance, resp.weight);
         }
         Commands::Deploy { instance, weight, timeout } => {
             let (process, version) = parse_instance(&instance)?;
-            let client = ApiClient::from_args(&cli.server, cli.token)?;
+            let client = ApiClient::from_args(&cli.server, cli.token, cli.data_dir.as_deref())?;
             println!("Deploying {}:{} with weight {}", process, version, weight);
             println!("Waiting for health check (timeout: {}s)...", timeout);
 
@@ -268,7 +272,7 @@ async fn main() -> Result<()> {
             println!("Status: {}", resp.status);
         }
         Commands::Route { process, from, to } => {
-            let client = ApiClient::from_args(&cli.server, cli.token)?;
+            let client = ApiClient::from_args(&cli.server, cli.token, cli.data_dir.as_deref())?;
             let resp = client.route(&process, &from, &to).await?;
 
             println!("Routed traffic: {} -> {}", resp.from_instance, resp.to_instance);
@@ -276,7 +280,7 @@ async fn main() -> Result<()> {
             println!("  {} weight = {}", resp.to_instance, resp.to_weight);
         }
         Commands::Logs { instance, level, search, limit, follow } => {
-            let client = ApiClient::from_args(&cli.server, cli.token)?;
+            let client = ApiClient::from_args(&cli.server, cli.token, cli.data_dir.as_deref())?;
             let (process, id) = match &instance {
                 Some(inst) => {
                     let (p, i) = parse_instance(inst)?;
@@ -321,7 +325,7 @@ async fn main() -> Result<()> {
             cmd_init(name, command)?;
         }
         Commands::Config => {
-            let config = Config::load()?;
+            let config = Config::load_with_override(cli.data_dir)?;
             println!("Data dir: {:?}", config.settings.data_dir);
             println!("Health interval: {}s", config.settings.health_check_interval);
             println!("\nServices:");
@@ -338,8 +342,8 @@ async fn main() -> Result<()> {
             }
         }
         Commands::TokenGen { tenant, description } => {
-            let config = Config::load()?;
-            let data_dir = PathBuf::from(&config.settings.data_dir);
+            let config = Config::load_with_override(cli.data_dir)?;
+            let data_dir = config.settings.data_dir;
             let db_path = data_dir.join("tenement.db");
             let pool = init_db(&db_path).await?;
 
@@ -394,9 +398,10 @@ async fn cmd_serve(
     tls: bool,
     email: Option<String>,
     staging: bool,
+    data_dir_override: Option<PathBuf>,
 ) -> Result<()> {
-    let config = Config::load()?;
-    let db_path = PathBuf::from(&config.settings.data_dir).join("tenement.db");
+    let config = Config::load_with_override(data_dir_override)?;
+    let db_path = config.settings.data_dir.join("tenement.db");
     let pool = init_db(&db_path).await?;
     let config_store = std::sync::Arc::new(ConfigStore::new(pool.clone()));
     let state_store = std::sync::Arc::new(tenement::StateStore::new(pool.clone()));
