@@ -1,5 +1,20 @@
 # Changelog
 
+## v0.2.2
+
+### Reliability
+- Proxy retries on dead direct backend instead of returning 502 — a single client request that races a process crash now blocks briefly while the health-checker respawns the instance, then succeeds
+- Weighted routing reselects past dead backends instead of returning 503 — picks via `select_weighted` (preserves weight semantics on the happy path), then falls back to a deterministic scan over remaining instances if the pick is unreachable
+
+### Examples
+- `examples/python-fastapi/pyproject.toml`: drop hatchling build, use `[tool.uv] package = false` so `uv sync` works as documented in the example README
+
+### Build / quality
+- New CI workflow: `fmt` / `clippy -D warnings` / `test` / `e2e` (15 user-visible scenarios) on every PR and push to `main`
+- `tenement/benches/performance.rs`: fix stale `ProcessConfig` literal that broke `cargo build --workspace --all-targets`
+- `store::tests`: poll-until-condition instead of fixed sleeps — suite went from ~22s to <1s, no longer flakes under load
+- Workspace `cargo fmt`; ~30 clippy warnings cleaned up
+
 ## v0.2.0
 
 ### Phase Nookie (Multi-Tenant Demo)

@@ -154,7 +154,7 @@ jobs:
           SOUP_TOKEN: ${{ secrets.SOUP_TOKEN }}
           SOUP_ORG: russellromney
         run: |
-          ~/.soup/bin/soup run --project tenement --env development -- \
+          ~/.soup/bin/soup run --project turbolite --env development -- \
             cargo publish -p tenement --allow-dirty || echo "Already published, skipping"
 
       - name: Wait for crates.io to index
@@ -165,7 +165,7 @@ jobs:
           SOUP_TOKEN: ${{ secrets.SOUP_TOKEN }}
           SOUP_ORG: russellromney
         run: |
-          ~/.soup/bin/soup run --project tenement --env development -- \
+          ~/.soup/bin/soup run --project turbolite --env development -- \
             cargo publish -p tenement-cli --allow-dirty || echo "Already published, skipping"
 
   # Deploy docs to Cloudflare Pages
