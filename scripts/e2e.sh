@@ -227,15 +227,18 @@ if [[ -z "${E2E_SKIP_FASTAPI:-}" ]] && command -v uv >/dev/null 2>&1 \
     && [[ -f "${REPO_ROOT}/examples/python-fastapi/app.py" ]]; then
   log "fastapi example will run (uv present)"
   cp "${REPO_ROOT}/examples/python-fastapi/app.py" "${SERVE_DIR}/fastapi_app.py"
-  # Pre-warm uv's cache so the spawned process starts fast on first request.
-  log "pre-warming uv cache (fastapi/uvicorn)"
-  uv run --quiet --with 'fastapi>=0.109.0' --with 'uvicorn>=0.27.0' \
-    python -c 'import fastapi, uvicorn' \
+  # Use whichever python3 is on PATH so uv doesn't download a fresh
+  # interpreter on first run (which can take minutes on cold CI).
+  PY="$(command -v python3)"
+  log "pre-warming uv cache with python: ${PY}"
+  uv run --python "${PY}" \
+    --with 'fastapi>=0.109.0' --with 'uvicorn>=0.27.0' \
+    python -c 'import fastapi, uvicorn; print("uv pre-warm ok")' \
     || fail "uv pre-warm failed"
   cat >> "${SERVE_DIR}/tenement.toml" <<EOF
 
 [service.fastapi]
-command = "uv run --with fastapi>=0.109.0 --with uvicorn>=0.27.0 python fastapi_app.py"
+command = "uv run --python ${PY} --with fastapi>=0.109.0 --with uvicorn>=0.27.0 python fastapi_app.py"
 health = "/health"
 isolation = "process"
 startup_timeout = 60
