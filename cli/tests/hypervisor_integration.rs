@@ -265,7 +265,7 @@ async fn test_spawn_logs_captured() {
     // Note: Log capture depends on process output timing
     // The script outputs both stdout and stderr
     assert!(
-        json.len() >= 1 || json.is_empty(), // Allow empty if timing doesn't capture
+        !json.is_empty() || json.is_empty(), // Allow empty if timing doesn't capture
         "Logs should be queryable (got {} entries)",
         json.len()
     );
@@ -664,7 +664,7 @@ async fn test_spawn_bad_command_fails() {
     let db_dir = TempDir::new().unwrap();
     let db_path = db_dir.path().join("test.db");
     let pool = init_db(&db_path).await.unwrap();
-    let config_store = Arc::new(ConfigStore::new(pool));
+    let _config_store = Arc::new(ConfigStore::new(pool));
 
     // Create config with non-existent command
     let mut config = Config::default();
@@ -700,8 +700,7 @@ async fn test_spawn_bad_command_fails() {
     let result = hypervisor.spawn("badcmd", &inst_id).await;
     // Note: spawn might succeed but the process exits immediately
     // Either way, the socket won't be created
-    if result.is_ok() {
-        let socket = result.unwrap();
+    if let Ok(socket) = result {
         // Wait briefly - socket should NOT be created
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         assert!(!socket.exists(), "Socket should not exist for bad command");
@@ -1014,7 +1013,7 @@ async fn test_port_released_after_stop() {
         let socket = hypervisor
             .spawn("api", &inst_id)
             .await
-            .expect(&format!("Spawn {} should succeed", i));
+            .unwrap_or_else(|_| panic!("Spawn {} should succeed", i));
         assert!(
             wait_for_socket(&socket, 2000).await,
             "Socket {} should be created",
@@ -1023,7 +1022,7 @@ async fn test_port_released_after_stop() {
         hypervisor
             .stop("api", &inst_id)
             .await
-            .expect(&format!("Stop {} should succeed", i));
+            .unwrap_or_else(|_| panic!("Stop {} should succeed", i));
     }
     // If we got here without running out of ports, the test passes
 }

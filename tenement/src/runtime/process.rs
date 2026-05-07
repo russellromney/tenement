@@ -124,7 +124,7 @@ mod tests {
 
     #[test]
     fn test_process_runtime_default() {
-        let runtime = ProcessRuntime::default();
+        let runtime = ProcessRuntime;
         assert!(runtime.is_available());
         assert_eq!(runtime.runtime_type(), RuntimeType::Process);
     }

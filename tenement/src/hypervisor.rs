@@ -1627,6 +1627,7 @@ mod tests {
     }
 
     // Helper to create a shell script that creates a socket and waits
+    #[allow(dead_code)]
     fn create_socket_server_script(dir: &Path) -> PathBuf {
         let script_path = dir.join("server.sh");
         let script = r#"#!/bin/bash
@@ -2710,8 +2711,10 @@ sleep 30
         // v1 should get roughly 90% of selections (with some variance)
         // Allow 15% margin for statistical variance
         let v1_ratio = v1_count as f64 / iterations as f64;
+        let v2_ratio = v2_count as f64 / iterations as f64;
         assert!(v1_ratio > 0.75, "v1 ratio {} should be > 0.75", v1_ratio);
         assert!(v1_ratio < 0.98, "v1 ratio {} should be < 0.98", v1_ratio);
+        assert!(v2_ratio > 0.02, "v2 ratio {} should be > 0.02", v2_ratio);
 
         hypervisor.stop("api", "v1").await.ok();
         hypervisor.stop("api", "v2").await.ok();

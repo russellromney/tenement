@@ -249,7 +249,7 @@ mod tests {
     #[test]
     fn test_log_level_clone() {
         let level = LogLevel::Stdout;
-        let cloned = level.clone();
+        let cloned = level;
         assert_eq!(level, cloned);
     }
 

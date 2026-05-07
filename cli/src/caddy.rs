@@ -64,6 +64,7 @@ pub fn generate_caddyfile(domain: &str, port: u16) -> String {
 }
 
 /// Generate a minimal Caddyfile (no logging, simpler)
+#[allow(dead_code)]
 pub fn generate_caddyfile_minimal(domain: &str, port: u16) -> String {
     format!(
         r#"# Tenement reverse proxy (minimal)
@@ -240,7 +241,7 @@ pub fn run(
             }
 
             // Create log directory
-            let log_dir = format!("/var/log/caddy");
+            let log_dir = "/var/log/caddy".to_string();
             std::fs::create_dir_all(&log_dir)?;
 
             std::fs::write(CADDYFILE_PATH, &caddyfile)

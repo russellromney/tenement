@@ -1,4 +1,9 @@
 //! Shared test utilities for integration and E2E tests
+//!
+//! Each test binary that includes this module compiles it independently and
+//! warns about helpers it doesn't happen to use. The whole point of the
+//! module is to be a shared toolbox, so allow dead code throughout.
+#![allow(dead_code)]
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};

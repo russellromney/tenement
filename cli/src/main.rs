@@ -589,7 +589,7 @@ fn cmd_init(name: Option<String>, command: Option<String>) -> Result<()> {
         );
     }
 
-    let detected_command = command.unwrap_or_else(|| detect_framework_command());
+    let detected_command = command.unwrap_or_else(detect_framework_command);
 
     let config = format!(
         r#"[service.{name}]

@@ -352,7 +352,7 @@ mod tests {
     #[test]
     fn test_health_status_clone() {
         let status = HealthStatus::Degraded;
-        let cloned = status.clone();
+        let cloned = status;
         assert_eq!(status, cloned);
     }
 
@@ -418,7 +418,7 @@ mod tests {
     #[test]
     fn test_instance_status_clone() {
         let status = InstanceStatus::Starting;
-        let cloned = status.clone();
+        let cloned = status;
         assert_eq!(status, cloned);
     }
 
@@ -601,10 +601,7 @@ mod tests {
     fn test_is_idle_logic_zero_timeout() {
         // If idle_timeout is Some(0), is_idle should return false
         let timeout: Option<u64> = Some(0);
-        let is_idle = match timeout {
-            Some(t) if t > 0 => true,
-            _ => false,
-        };
+        let is_idle = matches!(timeout, Some(t) if t > 0);
         assert!(!is_idle);
     }
 

@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 /// Main configuration structure
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Config {
     /// Global settings
     #[serde(default)]
@@ -320,17 +320,6 @@ pub struct RoutingConfig {
     pub path: HashMap<String, String>,
 }
 
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            settings: Settings::default(),
-            service: HashMap::new(),
-            routing: RoutingConfig::default(),
-            instances: HashMap::new(),
-        }
-    }
-}
-
 impl Config {
     /// Load config from tenement.toml in current directory or parents
     pub fn load() -> Result<Self> {
@@ -375,11 +364,12 @@ impl Config {
     }
 
     /// Parse config from a TOML string
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(content: &str) -> Result<Self> {
         let config: Config = toml::from_str(content)?;
 
         // Validate instances reference defined services
-        for (service_name, _instance_ids) in &config.instances {
+        for service_name in config.instances.keys() {
             if !config.service.contains_key(service_name) {
                 anyhow::bail!(
                     "Instance references undefined service '{}'. \

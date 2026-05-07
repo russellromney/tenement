@@ -9,9 +9,13 @@
 //!
 //! Run with: cargo test --test cgroup_lifecycle -- --ignored
 
+// Helpers below are only used by the cfg(target_os = "linux") test
+// submodule; suppress dead_code warnings on macOS.
+#![allow(dead_code)]
+
 mod common;
 
-use common::{test_config_with_limits, test_config_with_process};
+use common::test_config_with_limits;
 use std::path::PathBuf;
 use tempfile::TempDir;
 

@@ -272,6 +272,7 @@ fn labels_to_key(labels: &Labels) -> String {
 }
 
 /// Parse a label key back to labels
+#[allow(dead_code)]
 fn key_to_labels(key: &str) -> Labels {
     if key.is_empty() {
         return HashMap::new();

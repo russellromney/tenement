@@ -166,6 +166,7 @@ async fn shutdown_signal(hypervisor: Arc<Hypervisor>) {
 }
 
 /// Constant-time byte comparison to prevent timing attacks on token verification
+#[allow(dead_code)]
 fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     if a.len() != b.len() {
         return false;
@@ -835,6 +836,7 @@ struct ProxyTarget {
 }
 
 impl ProxyTarget {
+    #[allow(dead_code)]
     fn uses_tcp(&self) -> bool {
         self.port.is_some()
     }
@@ -842,6 +844,63 @@ impl ProxyTarget {
     fn tcp_addr(&self) -> Option<String> {
         self.port.map(|p| format!("127.0.0.1:{}", p))
     }
+
+    /// Quick liveness probe: try to open a connection. Used to distinguish
+    /// "registry says up but socket is dead" (e.g. process crashed and
+    /// the health-checker hasn't noticed yet) from a healthy backend.
+    async fn probe(&self) -> bool {
+        let timeout = std::time::Duration::from_millis(150);
+        if let Some(addr) = self.tcp_addr() {
+            tokio::time::timeout(timeout, tokio::net::TcpStream::connect(&addr))
+                .await
+                .map(|r| r.is_ok())
+                .unwrap_or(false)
+        } else {
+            tokio::time::timeout(timeout, tokio::net::UnixStream::connect(&self.socket))
+                .await
+                .map(|r| r.is_ok())
+                .unwrap_or(false)
+        }
+    }
+}
+
+/// If the registered target's socket is dead, wait briefly for the hypervisor's
+/// health checker (interval = settings.health_check_interval, default 10s) to
+/// notice and respawn. Re-fetches the target on each retry because port and
+/// socket may change after a restart.
+///
+/// Returns the final (live) target, or None if it never came back. Only used
+/// for direct routing — the weighted path returns 503 immediately and lets the
+/// client retry against a different instance.
+async fn wait_for_alive_target(
+    state: &AppState,
+    process: &str,
+    id: &str,
+    initial: ProxyTarget,
+    deadline: std::time::Instant,
+) -> Option<ProxyTarget> {
+    if initial.probe().await {
+        return Some(initial);
+    }
+    tracing::warn!(
+        "Backend for {}:{} is registered but unreachable; waiting for restart",
+        process,
+        id
+    );
+    while std::time::Instant::now() < deadline {
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        if let Some(info) = state.hypervisor.get(process, id).await {
+            let candidate = ProxyTarget {
+                socket: info.socket,
+                port: info.port,
+            };
+            if candidate.probe().await {
+                tracing::info!("Backend for {}:{} is back", process, id);
+                return Some(candidate);
+            }
+        }
+    }
+    None
 }
 
 /// Handle incoming requests - route to dashboard or proxy to process
@@ -951,11 +1010,11 @@ async fn proxy_to_instance(
     let target = match id {
         Some(instance_id) => {
             // Direct routing to specific instance
-            match state.hypervisor.get_and_touch(process, instance_id).await {
-                Some(info) => ProxyTarget {
+            let registered = match state.hypervisor.get_and_touch(process, instance_id).await {
+                Some(info) => Some(ProxyTarget {
                     socket: info.socket,
                     port: info.port,
-                },
+                }),
                 None => {
                     // Wake-on-request: spawn and wait for instance to be ready
                     tracing::info!("Waking instance {}:{}", process, instance_id);
@@ -967,7 +1026,7 @@ async fn proxy_to_instance(
                                 .get(process, instance_id)
                                 .await
                                 .and_then(|info| info.port);
-                            ProxyTarget { socket, port }
+                            Some(ProxyTarget { socket, port })
                         }
                         Err(e) => {
                             tracing::error!(
@@ -983,6 +1042,26 @@ async fn proxy_to_instance(
                                 .into_response();
                         }
                     }
+                }
+            };
+            // Registry says the instance is up — but the process may have
+            // crashed between health checks. Probe and wait briefly for the
+            // health-checker to restart it before forwarding the request.
+            let initial = registered.unwrap();
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+            match wait_for_alive_target(state, process, instance_id, initial, deadline).await {
+                Some(t) => t,
+                None => {
+                    tracing::error!(
+                        "Backend for {}:{} did not recover within 15s",
+                        process,
+                        instance_id
+                    );
+                    return (
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        "Service temporarily unavailable",
+                    )
+                        .into_response();
                 }
             }
         }

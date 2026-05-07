@@ -140,7 +140,7 @@ mod tests {
     async fn test_allocate_single_port() {
         let allocator = PortAllocator::new();
         let port = allocator.allocate().await.unwrap();
-        assert!(port >= PORT_MIN && port <= PORT_MAX);
+        assert!((PORT_MIN..=PORT_MAX).contains(&port));
     }
 
     #[tokio::test]
@@ -151,9 +151,9 @@ mod tests {
         let port3 = allocator.allocate().await.unwrap();
 
         // All should be in range and different
-        assert!(port1 >= PORT_MIN && port1 <= PORT_MAX);
-        assert!(port2 >= PORT_MIN && port2 <= PORT_MAX);
-        assert!(port3 >= PORT_MIN && port3 <= PORT_MAX);
+        assert!((PORT_MIN..=PORT_MAX).contains(&port1));
+        assert!((PORT_MIN..=PORT_MAX).contains(&port2));
+        assert!((PORT_MIN..=PORT_MAX).contains(&port3));
         assert_ne!(port1, port2);
         assert_ne!(port2, port3);
         assert_ne!(port1, port3);
@@ -352,7 +352,7 @@ mod tests {
 
         // About half should be released (those with even i)
         let count = allocator.allocated_count().await;
-        assert!(count >= 20 && count <= 30); // Allow some variance
+        assert!((20..=30).contains(&count)); // Allow some variance
     }
 
     #[tokio::test]

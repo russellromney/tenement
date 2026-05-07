@@ -42,7 +42,7 @@ jobs:
           npm run build
       - name: Copy dashboard dist into CLI crate
         run: cp -r dashboard/dist cli/dashboard-dist
-      - run: cargo clippy --workspace --all-targets
+      - run: cargo clippy --workspace --all-targets -- -D warnings
 
   test:
     name: Test
