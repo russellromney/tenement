@@ -310,15 +310,15 @@ async fn test_malformed_authorization_headers() {
     // Note: HTTP headers can't contain control chars like \n, \r, \t
     // These are valid HTTP header values but malformed Bearer tokens
     let malformed = [
-        "Bearer",                    // No space, no token
-        "Bearer  ",                  // Double space, no token
-        " Bearer token",             // Leading space
-        "Bearer  token",             // Double space before token
-        "bearer",                    // Just keyword, no token
-        "   ",                       // Just whitespace
-        "BearerToken",               // No space between scheme and token
-        "Bearer:",                   // Colon instead of space
-        "Bearer=token",              // Equals sign
+        "Bearer",        // No space, no token
+        "Bearer  ",      // Double space, no token
+        " Bearer token", // Leading space
+        "Bearer  token", // Double space before token
+        "bearer",        // Just keyword, no token
+        "   ",           // Just whitespace
+        "BearerToken",   // No space between scheme and token
+        "Bearer:",       // Colon instead of space
+        "Bearer=token",  // Equals sign
     ];
 
     for header in malformed {
@@ -472,10 +472,7 @@ async fn test_subdomain_with_different_patterns() {
     ];
 
     for subdomain in subdomains {
-        let response = server
-            .get("/test")
-            .add_header("Host", subdomain)
-            .await;
+        let response = server.get("/test").add_header("Host", subdomain).await;
         // Should be 404 (not found), not 401 (unauthorized)
         response.assert_status_not_found();
     }
@@ -586,12 +583,7 @@ async fn test_empty_and_whitespace_tokens() {
     let (server, _token, _dir) = setup_simple().await;
 
     // Note: HTTP headers can't contain control chars like \n, \t
-    let invalid = [
-        "Bearer ",
-        "Bearer  ",
-        "Bearer   ",
-        "Bearer     ",
-    ];
+    let invalid = ["Bearer ", "Bearer  ", "Bearer   ", "Bearer     "];
 
     for header in invalid {
         let response = server
@@ -753,9 +745,7 @@ async fn test_token_in_query_param_rejected() {
     let (server, token, _dir) = setup_simple().await;
 
     // Token in query param should NOT work (only header auth supported)
-    let response = server
-        .get(&format!("/api/instances?token={}", token))
-        .await;
+    let response = server.get(&format!("/api/instances?token={}", token)).await;
     response.assert_status_unauthorized();
 
     let response = server

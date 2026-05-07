@@ -646,7 +646,7 @@ mod tests {
 
         // Minutes
         assert_eq!(format_uptime(60), "1m");
-        assert_eq!(format_uptime(90), "1m");  // 1.5 minutes = 1m
+        assert_eq!(format_uptime(90), "1m"); // 1.5 minutes = 1m
         assert_eq!(format_uptime(120), "2m");
         assert_eq!(format_uptime(3599), "59m");
 
@@ -811,7 +811,7 @@ mod tests {
             idle_secs: 0,
             idle_timeout: None,
             storage_used_bytes: 1024 * 1024 * 100, // 100MB
-            storage_quota_bytes: None, // No quota
+            storage_quota_bytes: None,             // No quota
             data_dir: PathBuf::from("/data/api/user1"),
             weight: 100,
         };
@@ -833,7 +833,7 @@ mod tests {
             status: InstanceStatus::Running,
             idle_secs: 0,
             idle_timeout: None,
-            storage_used_bytes: 134217728, // 128MB
+            storage_used_bytes: 134217728,        // 128MB
             storage_quota_bytes: Some(536870912), // 512MB
             data_dir: PathBuf::from("/data/api/user1"),
             weight: 100,

@@ -5,9 +5,9 @@
 
 use criterion::{criterion_group, criterion_main, Criterion};
 use std::collections::HashMap;
+use tenement::config::ProcessConfig;
 use tenement::runtime::RuntimeType;
 use tenement::{Config, Hypervisor, LogQuery};
-use tenement::config::ProcessConfig;
 use tokio::runtime::Runtime;
 
 /// Create a test config with a process
@@ -82,9 +82,8 @@ fn bench_log_buffer_query(c: &mut Criterion) {
     };
 
     c.bench_function("log_buffer_query_100", |b| {
-        b.to_async(&rt).iter(|| async {
-            log_buffer.query(&query).await
-        })
+        b.to_async(&rt)
+            .iter(|| async { log_buffer.query(&query).await })
     });
 }
 
@@ -118,9 +117,8 @@ fn bench_fts_search(c: &mut Criterion) {
     };
 
     c.bench_function("fts_search_10k_entries", |b| {
-        b.to_async(&rt).iter(|| async {
-            log_buffer.query(&query).await
-        })
+        b.to_async(&rt)
+            .iter(|| async { log_buffer.query(&query).await })
     });
 }
 
@@ -135,9 +133,8 @@ fn bench_metrics_format(c: &mut Criterion) {
     metrics.instances_up.set(10);
 
     c.bench_function("metrics_format_prometheus", |b| {
-        b.to_async(&rt).iter(|| async {
-            metrics.format_prometheus().await
-        })
+        b.to_async(&rt)
+            .iter(|| async { metrics.format_prometheus().await })
     });
 }
 
@@ -185,9 +182,8 @@ fn bench_health_check_latency(c: &mut Criterion) {
 
     // Health check on non-existent instance (fast path - no socket)
     c.bench_function("health_check_nonexistent", |b| {
-        b.to_async(&rt).iter(|| async {
-            hypervisor.check_health("api", "nonexistent").await
-        })
+        b.to_async(&rt)
+            .iter(|| async { hypervisor.check_health("api", "nonexistent").await })
     });
 }
 
@@ -198,9 +194,7 @@ fn bench_hypervisor_list(c: &mut Criterion) {
     let hypervisor = rt.block_on(async { Hypervisor::new(config) });
 
     c.bench_function("hypervisor_list_empty", |b| {
-        b.to_async(&rt).iter(|| async {
-            hypervisor.list().await
-        })
+        b.to_async(&rt).iter(|| async { hypervisor.list().await })
     });
 }
 
@@ -211,9 +205,8 @@ fn bench_instance_get(c: &mut Criterion) {
     let hypervisor = rt.block_on(async { Hypervisor::new(config) });
 
     c.bench_function("instance_get_nonexistent", |b| {
-        b.to_async(&rt).iter(|| async {
-            hypervisor.get("api", "nonexistent").await
-        })
+        b.to_async(&rt)
+            .iter(|| async { hypervisor.get("api", "nonexistent").await })
     });
 }
 

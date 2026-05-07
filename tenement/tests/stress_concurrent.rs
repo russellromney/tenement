@@ -235,7 +235,10 @@ async fn test_stress_concurrent_health_checks() {
 
     // First, spawn all instances
     for i in 0..NUM_INSTANCES {
-        let socket = hypervisor.spawn("api", &format!("health{}", i)).await.unwrap();
+        let socket = hypervisor
+            .spawn("api", &format!("health{}", i))
+            .await
+            .unwrap();
         // Brief wait for socket creation
         wait_for_socket(&socket, 500).await;
     }

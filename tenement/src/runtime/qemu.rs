@@ -151,8 +151,7 @@ impl QemuRuntime {
                             .is_ok()
                         {
                             line.clear();
-                            if reader.read_line(&mut line).await.is_ok()
-                                && line.contains("return")
+                            if reader.read_line(&mut line).await.is_ok() && line.contains("return")
                             {
                                 return Ok(());
                             }
@@ -162,11 +161,7 @@ impl QemuRuntime {
             }
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
-        anyhow::bail!(
-            "QMP socket {:?} not ready after {:?}",
-            socket_path,
-            timeout
-        )
+        anyhow::bail!("QMP socket {:?} not ready after {:?}", socket_path, timeout)
     }
 
     /// Get detailed availability status
@@ -226,10 +221,7 @@ impl Runtime for QemuRuntime {
         }
 
         if !vm_config.rootfs.exists() {
-            anyhow::bail!(
-                "Root filesystem not found: {}",
-                vm_config.rootfs.display()
-            );
+            anyhow::bail!("Root filesystem not found: {}", vm_config.rootfs.display());
         }
 
         let instance_id = Self::allocate_id();
@@ -243,9 +235,12 @@ impl Runtime for QemuRuntime {
             .and_then(|s| s.to_str())
             .unwrap_or("qemu");
 
-        let qmp_socket = socket_dir.join(format!("qemu-{}-{}-qmp.sock", instance_name, instance_id));
-        let serial_socket =
-            socket_dir.join(format!("qemu-{}-{}-serial.sock", instance_name, instance_id));
+        let qmp_socket =
+            socket_dir.join(format!("qemu-{}-{}-qmp.sock", instance_name, instance_id));
+        let serial_socket = socket_dir.join(format!(
+            "qemu-{}-{}-serial.sock",
+            instance_name, instance_id
+        ));
 
         // Clean up old sockets
         std::fs::remove_file(&qmp_socket).ok();
@@ -276,13 +271,14 @@ impl Runtime for QemuRuntime {
 
         // CPU and memory
         cmd.arg("-accel").arg(accel);
-        cmd.arg("-cpu").arg(if accel == "hvf" && cfg!(target_arch = "x86_64") {
-            "host"
-        } else if accel == "kvm" {
-            "host"
-        } else {
-            "max"
-        });
+        cmd.arg("-cpu")
+            .arg(if accel == "hvf" && cfg!(target_arch = "x86_64") {
+                "host"
+            } else if accel == "kvm" {
+                "host"
+            } else {
+                "max"
+            });
         cmd.arg("-smp").arg(vm_config.vcpus.to_string());
         cmd.arg("-m").arg(format!("{}M", vm_config.memory_mb));
 
@@ -292,11 +288,10 @@ impl Runtime for QemuRuntime {
         cmd.arg("-append").arg(boot_args);
 
         // Root filesystem
-        cmd.arg("-drive")
-            .arg(format!(
-                "file={},format=raw,if=virtio",
-                vm_config.rootfs.display()
-            ));
+        cmd.arg("-drive").arg(format!(
+            "file={},format=raw,if=virtio",
+            vm_config.rootfs.display()
+        ));
 
         // QMP control socket
         cmd.arg("-qmp")

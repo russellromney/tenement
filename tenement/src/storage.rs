@@ -142,8 +142,8 @@ pub async fn calculate_dir_size(path: PathBuf) -> Result<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::TempDir;
     use std::fs;
+    use tempfile::TempDir;
 
     // ===================
     // STORAGE INFO TESTS
@@ -163,11 +163,7 @@ mod tests {
 
     #[test]
     fn test_storage_info_no_quota() {
-        let info = StorageInfo::new(
-            5 * 1024 * 1024,
-            None,
-            PathBuf::from("/data/api/prod"),
-        );
+        let info = StorageInfo::new(5 * 1024 * 1024, None, PathBuf::from("/data/api/prod"));
         assert_eq!(info.quota_bytes, None);
         assert!(!info.is_over_quota());
         assert_eq!(info.usage_percent(), None);
@@ -177,8 +173,8 @@ mod tests {
     #[test]
     fn test_usage_percent() {
         let info = StorageInfo::new(
-            25 * 1024 * 1024,  // 25MB used
-            Some(100 * 1024 * 1024),  // 100MB quota
+            25 * 1024 * 1024,        // 25MB used
+            Some(100 * 1024 * 1024), // 100MB quota
             PathBuf::from("/data"),
         );
 
@@ -189,8 +185,8 @@ mod tests {
     #[test]
     fn test_usage_percent_zero_quota() {
         let info = StorageInfo::new(
-            1024,  // 1KB used
-            Some(0),  // 0 quota
+            1024,    // 1KB used
+            Some(0), // 0 quota
             PathBuf::from("/data"),
         );
 
@@ -201,8 +197,8 @@ mod tests {
     #[test]
     fn test_usage_percent_zero_used_zero_quota() {
         let info = StorageInfo::new(
-            0,  // 0 used
-            Some(0),  // 0 quota
+            0,       // 0 used
+            Some(0), // 0 quota
             PathBuf::from("/data"),
         );
 
@@ -213,8 +209,8 @@ mod tests {
     #[test]
     fn test_usage_ratio() {
         let info = StorageInfo::new(
-            50 * 1024 * 1024,  // 50MB used
-            Some(100 * 1024 * 1024),  // 100MB quota
+            50 * 1024 * 1024,        // 50MB used
+            Some(100 * 1024 * 1024), // 100MB quota
             PathBuf::from("/data"),
         );
 
@@ -250,11 +246,7 @@ mod tests {
         );
         assert_eq!(with_quota.format_usage(), "134MB / 512MB");
 
-        let without_quota = StorageInfo::new(
-            256 * 1024 * 1024,
-            None,
-            PathBuf::from("/data"),
-        );
+        let without_quota = StorageInfo::new(256 * 1024 * 1024, None, PathBuf::from("/data"));
         assert_eq!(without_quota.format_usage(), "256MB");
     }
 
@@ -268,7 +260,7 @@ mod tests {
         assert_eq!(format_bytes(512), "512B");
         assert_eq!(format_bytes(1023), "1023B");
         assert_eq!(format_bytes(1024), "1KB");
-        assert_eq!(format_bytes(1536), "1KB");  // Truncates, not rounds
+        assert_eq!(format_bytes(1536), "1KB"); // Truncates, not rounds
         assert_eq!(format_bytes(1024 * 1024), "1MB");
         assert_eq!(format_bytes(134 * 1024 * 1024), "134MB");
         assert_eq!(format_bytes(1024 * 1024 * 1024), "1.0GB");
@@ -299,8 +291,8 @@ mod tests {
     #[test]
     fn test_calculate_dir_size_multiple_files() {
         let dir = TempDir::new().unwrap();
-        fs::write(dir.path().join("a.txt"), "aaa").unwrap();  // 3 bytes
-        fs::write(dir.path().join("b.txt"), "bbbbb").unwrap();  // 5 bytes
+        fs::write(dir.path().join("a.txt"), "aaa").unwrap(); // 3 bytes
+        fs::write(dir.path().join("b.txt"), "bbbbb").unwrap(); // 5 bytes
 
         let size = calculate_dir_size_sync(dir.path()).unwrap();
         assert_eq!(size, 8);
@@ -312,8 +304,8 @@ mod tests {
         let sub = dir.path().join("subdir");
         fs::create_dir(&sub).unwrap();
 
-        fs::write(dir.path().join("root.txt"), "root").unwrap();  // 4 bytes
-        fs::write(sub.join("nested.txt"), "nested").unwrap();  // 6 bytes
+        fs::write(dir.path().join("root.txt"), "root").unwrap(); // 4 bytes
+        fs::write(sub.join("nested.txt"), "nested").unwrap(); // 6 bytes
 
         let size = calculate_dir_size_sync(dir.path()).unwrap();
         assert_eq!(size, 10);
@@ -367,11 +359,7 @@ mod tests {
 
     #[test]
     fn test_storage_info_serialize() {
-        let info = StorageInfo::new(
-            134217728,
-            Some(536870912),
-            PathBuf::from("/data/api/prod"),
-        );
+        let info = StorageInfo::new(134217728, Some(536870912), PathBuf::from("/data/api/prod"));
 
         let json = serde_json::to_string(&info).unwrap();
         assert!(json.contains("134217728"));

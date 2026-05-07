@@ -87,9 +87,7 @@ pub struct ApiError {
 
 impl ApiError {
     fn new(msg: impl Into<String>) -> Self {
-        Self {
-            error: msg.into(),
-        }
+        Self { error: msg.into() }
     }
 }
 
@@ -130,7 +128,11 @@ pub async fn post_spawn(
         .and_then(|info| info.port);
 
     // Audit log
-    if let Err(e) = state.deploy_log.log("spawn", &req.process, &req.id, None, true).await {
+    if let Err(e) = state
+        .deploy_log
+        .log("spawn", &req.process, &req.id, None, true)
+        .await
+    {
         tracing::error!("Audit log failed: {}", e);
     }
 
@@ -156,14 +158,15 @@ pub async fn delete_instance(
         .await
         .map_err(|e| {
             tracing::error!("Failed to stop {}: {}", id, e);
-            (
-                StatusCode::NOT_FOUND,
-                Json(ApiError::new(e.to_string())),
-            )
+            (StatusCode::NOT_FOUND, Json(ApiError::new(e.to_string())))
         })?;
 
     // Audit log
-    if let Err(e) = state.deploy_log.log("stop", &process, &instance_id, None, true).await {
+    if let Err(e) = state
+        .deploy_log
+        .log("stop", &process, &instance_id, None, true)
+        .await
+    {
         tracing::error!("Audit log failed: {}", e);
     }
 
@@ -218,12 +221,7 @@ pub async fn put_weight(
         .hypervisor
         .set_weight(&process, &instance_id, req.weight)
         .await
-        .map_err(|e| {
-            (
-                StatusCode::NOT_FOUND,
-                Json(ApiError::new(e.to_string())),
-            )
-        })?;
+        .map_err(|e| (StatusCode::NOT_FOUND, Json(ApiError::new(e.to_string()))))?;
 
     Ok(Json(WeightResponse {
         instance: id,
@@ -240,10 +238,7 @@ pub async fn get_health_check(
     let (process, instance_id) = parse_instance_id(&id)?;
     check_tenant_access(&auth, &instance_id)?;
 
-    let status = state
-        .hypervisor
-        .check_health(&process, &instance_id)
-        .await;
+    let status = state.hypervisor.check_health(&process, &instance_id).await;
 
     Ok(Json(serde_json::json!({
         "instance": id,
@@ -268,12 +263,7 @@ pub async fn post_deploy(
         .deploy_and_wait_healthy(&req.process, &req.version, req.weight, req.timeout)
         .await
         .map_err(|e| {
-            tracing::error!(
-                "Deploy failed for {}:{}: {}",
-                req.process,
-                req.version,
-                e
-            );
+            tracing::error!("Deploy failed for {}:{}: {}", req.process, req.version, e);
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(ApiError::new(e.to_string())),
@@ -281,13 +271,17 @@ pub async fn post_deploy(
         })?;
 
     // Audit log
-    if let Err(e) = state.deploy_log.log(
-        "deploy",
-        &req.process,
-        &req.version,
-        Some(&format!("weight={}", req.weight)),
-        true,
-    ).await {
+    if let Err(e) = state
+        .deploy_log
+        .log(
+            "deploy",
+            &req.process,
+            &req.version,
+            Some(&format!("weight={}", req.weight)),
+            true,
+        )
+        .await
+    {
         tracing::error!("Audit log failed: {}", e);
     }
 
@@ -330,13 +324,17 @@ pub async fn post_route(
         })?;
 
     // Audit log
-    if let Err(e) = state.deploy_log.log(
-        "route",
-        &req.process,
-        &format!("{} -> {}", req.from, req.to),
-        Some("weight swap: 0/100"),
-        true,
-    ).await {
+    if let Err(e) = state
+        .deploy_log
+        .log(
+            "route",
+            &req.process,
+            &format!("{} -> {}", req.from, req.to),
+            Some("weight swap: 0/100"),
+            true,
+        )
+        .await
+    {
         tracing::error!("Audit log failed: {}", e);
     }
 

@@ -82,14 +82,35 @@ pub fn create_router(state: AppState) -> Router {
         .route("/metrics", get(metrics_endpoint))
         .route("/api/telemetry", get(telemetry_endpoint))
         .route("/api/instances", get(list_instances))
-        .route("/api/instances/spawn", axum::routing::post(crate::api_routes::post_spawn))
-        .route("/api/instances/:id", axum::routing::delete(crate::api_routes::delete_instance))
+        .route(
+            "/api/instances/spawn",
+            axum::routing::post(crate::api_routes::post_spawn),
+        )
+        .route(
+            "/api/instances/:id",
+            axum::routing::delete(crate::api_routes::delete_instance),
+        )
         .route("/api/instances/:id/storage", get(get_instance_storage))
-        .route("/api/instances/:id/restart", axum::routing::post(crate::api_routes::post_restart))
-        .route("/api/instances/:id/weight", axum::routing::put(crate::api_routes::put_weight))
-        .route("/api/instances/:id/health", axum::routing::get(crate::api_routes::get_health_check))
-        .route("/api/deploy", axum::routing::post(crate::api_routes::post_deploy))
-        .route("/api/route", axum::routing::post(crate::api_routes::post_route))
+        .route(
+            "/api/instances/:id/restart",
+            axum::routing::post(crate::api_routes::post_restart),
+        )
+        .route(
+            "/api/instances/:id/weight",
+            axum::routing::put(crate::api_routes::put_weight),
+        )
+        .route(
+            "/api/instances/:id/health",
+            axum::routing::get(crate::api_routes::get_health_check),
+        )
+        .route(
+            "/api/deploy",
+            axum::routing::post(crate::api_routes::post_deploy),
+        )
+        .route(
+            "/api/route",
+            axum::routing::post(crate::api_routes::post_route),
+        )
         .route("/api/logs", get(query_logs))
         .route("/api/logs/stream", get(stream_logs))
         .route("/api/tls/status", get(tls_status_endpoint))
@@ -101,8 +122,14 @@ pub fn create_router(state: AppState) -> Router {
         // - TraceLayer runs first (outermost)
         // - subdomain_middleware runs second (intercepts subdomains before auth)
         // - auth_middleware runs last for non-subdomain requests
-        .layer(middleware::from_fn_with_state(state.clone(), auth_middleware))
-        .layer(middleware::from_fn_with_state(state.clone(), subdomain_middleware))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            auth_middleware,
+        ))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            subdomain_middleware,
+        ))
         .layer(TraceLayer::new_for_http())
         .with_state(state)
 }
@@ -192,7 +219,12 @@ async fn auth_middleware(
     let path = req.uri().path();
 
     // Skip auth for public endpoints
-    if path == "/health" || path == "/metrics" || path == "/api/telemetry" || path == "/" || path.starts_with("/assets/") {
+    if path == "/health"
+        || path == "/metrics"
+        || path == "/api/telemetry"
+        || path == "/"
+        || path.starts_with("/assets/")
+    {
         return Ok(next.run(req).await);
     }
 
@@ -235,7 +267,8 @@ async fn auth_middleware(
             let mut failures = state.auth_failures.write().await;
             *failures = (0, None);
             // Admin token: full access (no tenant scoping)
-            req.extensions_mut().insert(AuthIdentity { tenant_id: None });
+            req.extensions_mut()
+                .insert(AuthIdentity { tenant_id: None });
             return Ok(next.run(req).await);
         }
         Ok(false) => {} // Not the admin token, try tenant tokens
@@ -289,7 +322,8 @@ pub async fn serve(
     if failed > 0 {
         tracing::warn!(
             "Auto-spawn: {} succeeded, {} failed - check logs for details",
-            success, failed
+            success,
+            failed
         );
     } else if success > 0 {
         tracing::info!("Auto-spawn: {} instance(s) started", success);
@@ -326,12 +360,8 @@ pub async fn serve(
     };
 
     match tls_options {
-        Some(tls) if tls.enabled => {
-            serve_with_tls(state, tls).await
-        }
-        _ => {
-            serve_http_only(state, port).await
-        }
+        Some(tls) if tls.enabled => serve_with_tls(state, tls).await,
+        _ => serve_http_only(state, port).await,
     }
 }
 
@@ -446,7 +476,11 @@ async fn serve_with_tls(state: AppState, tls: TlsOptions) -> Result<()> {
     let app = create_router(state.clone());
     let https_addr = SocketAddr::from(([0, 0, 0, 0], tls.https_port));
 
-    tracing::info!("tenement listening on https://{}:{}", tls.domain, tls.https_port);
+    tracing::info!(
+        "tenement listening on https://{}:{}",
+        tls.domain,
+        tls.https_port
+    );
     tracing::info!("HTTP redirect on port {}", tls.http_port);
     if tls.staging {
         tracing::warn!("Using Let's Encrypt STAGING environment (certs not trusted by browsers)");
@@ -500,7 +534,9 @@ async fn dashboard() -> impl IntoResponse {
 }
 
 /// Serve dashboard assets
-async fn dashboard_asset(axum::extract::Path(path): axum::extract::Path<String>) -> impl IntoResponse {
+async fn dashboard_asset(
+    axum::extract::Path(path): axum::extract::Path<String>,
+) -> impl IntoResponse {
     crate::dashboard::serve_asset(&path).await
 }
 
@@ -545,7 +581,10 @@ async fn metrics_endpoint(State(state): State<AppState>) -> impl IntoResponse {
     let metrics = state.hypervisor.metrics();
     let output = metrics.format_prometheus().await;
     (
-        [(axum::http::header::CONTENT_TYPE, "text/plain; charset=utf-8")],
+        [(
+            axum::http::header::CONTENT_TYPE,
+            "text/plain; charset=utf-8",
+        )],
         output,
     )
 }
@@ -589,8 +628,17 @@ async fn telemetry_endpoint(State(state): State<AppState>) -> impl IntoResponse 
 
     // Summary stats
     let total_instances = instances.len();
-    let healthy_count = instances.iter().filter(|i| i.health == tenement::instance::HealthStatus::Healthy).count();
-    let total_requests: u64 = metrics.requests_total.all().await.iter().map(|(_, v)| *v).sum();
+    let healthy_count = instances
+        .iter()
+        .filter(|i| i.health == tenement::instance::HealthStatus::Healthy)
+        .count();
+    let total_requests: u64 = metrics
+        .requests_total
+        .all()
+        .await
+        .iter()
+        .map(|(_, v)| *v)
+        .sum();
 
     Json(serde_json::json!({
         "summary": {
@@ -660,7 +708,11 @@ pub async fn get_instance_storage(
     let instance_id = parts[1];
 
     // Get storage info from hypervisor
-    match state.hypervisor.get_storage_info(process, instance_id).await {
+    match state
+        .hypervisor
+        .get_storage_info(process, instance_id)
+        .await
+    {
         Some(info) => Ok(Json(StorageInfoResponse {
             used_bytes: info.used_bytes,
             quota_bytes: info.quota_bytes,
@@ -918,7 +970,12 @@ async fn proxy_to_instance(
                             ProxyTarget { socket, port }
                         }
                         Err(e) => {
-                            tracing::error!("Failed to wake instance {}:{}: {}", process, instance_id, e);
+                            tracing::error!(
+                                "Failed to wake instance {}:{}: {}",
+                                process,
+                                instance_id,
+                                e
+                            );
                             return (
                                 StatusCode::SERVICE_UNAVAILABLE,
                                 "Service temporarily unavailable",
@@ -956,7 +1013,10 @@ async fn proxy_to_instance(
 
     // Use the resolved instance ID (from weighted selection or direct routing)
     let conn_instance_id = resolved_instance_id.as_deref().or(id).unwrap_or("unknown");
-    let _conn_guard = state.hypervisor.connection_start(process, conn_instance_id).await;
+    let _conn_guard = state
+        .hypervisor
+        .connection_start(process, conn_instance_id)
+        .await;
 
     // Proxy with request timeout
     let timeout = state.hypervisor.request_timeout(process);
@@ -973,7 +1033,11 @@ async fn proxy_to_instance(
     let response = match tokio::time::timeout(timeout, proxy_future).await {
         Ok(resp) => resp,
         Err(_) => {
-            tracing::error!("Request timeout after {:?} for process {}", timeout, process);
+            tracing::error!(
+                "Request timeout after {:?} for process {}",
+                timeout,
+                process
+            );
             (StatusCode::GATEWAY_TIMEOUT, "Gateway timeout").into_response()
         }
     };
@@ -999,7 +1063,6 @@ async fn proxy_to_unix_socket(
     socket_path: &Path,
     req: Request<Body>,
 ) -> Response {
-
     // Build URI for Unix socket - hyperlocal requires a special URI format
     let path_and_query = req
         .uri()
@@ -1009,9 +1072,7 @@ async fn proxy_to_unix_socket(
     let socket_uri = hyperlocal::Uri::new(socket_path, path_and_query);
 
     // Build proxy request preserving method and headers
-    let mut proxy_req = Request::builder()
-        .method(req.method())
-        .uri(socket_uri);
+    let mut proxy_req = Request::builder().method(req.method()).uri(socket_uri);
 
     // Copy headers from original request
     for (key, value) in req.headers() {
@@ -1039,11 +1100,7 @@ async fn proxy_to_unix_socket(
         }
         Err(e) => {
             tracing::error!("Proxy error to {}: {}", socket_path.display(), e);
-            (
-                StatusCode::BAD_GATEWAY,
-                "Bad gateway".to_string(),
-            )
-                .into_response()
+            (StatusCode::BAD_GATEWAY, "Bad gateway".to_string()).into_response()
         }
     }
 }
@@ -1063,9 +1120,7 @@ async fn proxy_to_tcp(
     let uri = format!("http://{}{}", addr, path_and_query);
 
     // Build proxy request preserving method and headers
-    let mut proxy_req = Request::builder()
-        .method(req.method())
-        .uri(&uri);
+    let mut proxy_req = Request::builder().method(req.method()).uri(&uri);
 
     // Copy headers from original request
     for (key, value) in req.headers() {
@@ -1093,11 +1148,7 @@ async fn proxy_to_tcp(
         }
         Err(e) => {
             tracing::error!("Proxy error to {}: {}", addr, e);
-            (
-                StatusCode::BAD_GATEWAY,
-                "Bad gateway".to_string(),
-            )
-                .into_response()
+            (StatusCode::BAD_GATEWAY, "Bad gateway".to_string()).into_response()
         }
     }
 }
@@ -1265,8 +1316,12 @@ mod tests {
         let log_buffer = state.hypervisor.log_buffer();
 
         // Add some log entries
-        log_buffer.push_stdout("api", "prod", "hello world".to_string()).await;
-        log_buffer.push_stderr("api", "prod", "error message".to_string()).await;
+        log_buffer
+            .push_stdout("api", "prod", "hello world".to_string())
+            .await;
+        log_buffer
+            .push_stderr("api", "prod", "error message".to_string())
+            .await;
 
         let app = create_router(state);
         let server = TestServer::new(app).unwrap();
@@ -1287,8 +1342,12 @@ mod tests {
         let log_buffer = state.hypervisor.log_buffer();
 
         // Add entries for different processes
-        log_buffer.push_stdout("api", "prod", "api message".to_string()).await;
-        log_buffer.push_stdout("web", "prod", "web message".to_string()).await;
+        log_buffer
+            .push_stdout("api", "prod", "api message".to_string())
+            .await;
+        log_buffer
+            .push_stdout("web", "prod", "web message".to_string())
+            .await;
 
         let app = create_router(state);
         let server = TestServer::new(app).unwrap();
@@ -1310,8 +1369,12 @@ mod tests {
         let log_buffer = state.hypervisor.log_buffer();
 
         // Add entries for different instances
-        log_buffer.push_stdout("api", "prod", "prod message".to_string()).await;
-        log_buffer.push_stdout("api", "staging", "staging message".to_string()).await;
+        log_buffer
+            .push_stdout("api", "prod", "prod message".to_string())
+            .await;
+        log_buffer
+            .push_stdout("api", "staging", "staging message".to_string())
+            .await;
 
         let app = create_router(state);
         let server = TestServer::new(app).unwrap();
@@ -1333,8 +1396,12 @@ mod tests {
         let log_buffer = state.hypervisor.log_buffer();
 
         // Add stdout and stderr entries
-        log_buffer.push_stdout("api", "prod", "stdout message".to_string()).await;
-        log_buffer.push_stderr("api", "prod", "stderr message".to_string()).await;
+        log_buffer
+            .push_stdout("api", "prod", "stdout message".to_string())
+            .await;
+        log_buffer
+            .push_stderr("api", "prod", "stderr message".to_string())
+            .await;
 
         let app = create_router(state);
         let server = TestServer::new(app).unwrap();
@@ -1357,7 +1424,9 @@ mod tests {
 
         // Add multiple entries
         for i in 0..5 {
-            log_buffer.push_stdout("api", "prod", format!("msg{}", i)).await;
+            log_buffer
+                .push_stdout("api", "prod", format!("msg{}", i))
+                .await;
         }
 
         let app = create_router(state);
@@ -1379,9 +1448,15 @@ mod tests {
         let log_buffer = state.hypervisor.log_buffer();
 
         // Add entries with different content
-        log_buffer.push_stdout("api", "prod", "hello world".to_string()).await;
-        log_buffer.push_stdout("api", "prod", "goodbye world".to_string()).await;
-        log_buffer.push_stdout("api", "prod", "hello there".to_string()).await;
+        log_buffer
+            .push_stdout("api", "prod", "hello world".to_string())
+            .await;
+        log_buffer
+            .push_stdout("api", "prod", "goodbye world".to_string())
+            .await;
+        log_buffer
+            .push_stdout("api", "prod", "hello there".to_string())
+            .await;
 
         let app = create_router(state);
         let server = TestServer::new(app).unwrap();
@@ -1739,8 +1814,12 @@ mod tests {
         let log_buffer = state.hypervisor.log_buffer();
 
         // Add logs for different instances
-        log_buffer.push_stdout("api", "alice", "alice's log".to_string()).await;
-        log_buffer.push_stdout("api", "bob", "bob's log".to_string()).await;
+        log_buffer
+            .push_stdout("api", "alice", "alice's log".to_string())
+            .await;
+        log_buffer
+            .push_stdout("api", "bob", "bob's log".to_string())
+            .await;
 
         let app = create_router(state);
         let server = TestServer::new(app).unwrap();

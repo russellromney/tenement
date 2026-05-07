@@ -119,11 +119,7 @@ impl CgroupManager {
                         memory_max_path.display()
                     )
                 })?;
-                tracing::debug!(
-                    "Set memory limit for {}: {}MB",
-                    instance_id,
-                    memory_mb
-                );
+                tracing::debug!("Set memory limit for {}: {}MB", instance_id, memory_mb);
             }
         }
 
@@ -197,7 +193,12 @@ impl CgroupManager {
     }
 
     #[cfg(not(target_os = "linux"))]
-    pub fn add_process(&self, _instance_id: &str, _pid: u32, _limits: &ResourceLimits) -> Result<()> {
+    pub fn add_process(
+        &self,
+        _instance_id: &str,
+        _pid: u32,
+        _limits: &ResourceLimits,
+    ) -> Result<()> {
         Ok(())
     }
 
@@ -405,10 +406,7 @@ mod tests {
     fn test_cgroup_path() {
         let manager = CgroupManager::new();
         let path = manager.cgroup_path("api:user123");
-        assert_eq!(
-            path,
-            PathBuf::from("/sys/fs/cgroup/tenement/api:user123")
-        );
+        assert_eq!(path, PathBuf::from("/sys/fs/cgroup/tenement/api:user123"));
     }
 
     #[test]
@@ -425,10 +423,7 @@ mod tests {
     fn test_cgroup_path_simple_id() {
         let manager = CgroupManager::new();
         let path = manager.cgroup_path("simple");
-        assert_eq!(
-            path,
-            PathBuf::from("/sys/fs/cgroup/tenement/simple")
-        );
+        assert_eq!(path, PathBuf::from("/sys/fs/cgroup/tenement/simple"));
     }
 
     #[test]
@@ -679,10 +674,10 @@ mod tests {
             weight.clamp(1, 10000)
         }
 
-        assert_eq!(clamp_cpu_weight(0), 1);      // Below min
-        assert_eq!(clamp_cpu_weight(1), 1);      // At min
-        assert_eq!(clamp_cpu_weight(100), 100);  // Default
-        assert_eq!(clamp_cpu_weight(500), 500);  // Normal
+        assert_eq!(clamp_cpu_weight(0), 1); // Below min
+        assert_eq!(clamp_cpu_weight(1), 1); // At min
+        assert_eq!(clamp_cpu_weight(100), 100); // Default
+        assert_eq!(clamp_cpu_weight(500), 500); // Normal
         assert_eq!(clamp_cpu_weight(10000), 10000); // At max
         assert_eq!(clamp_cpu_weight(10001), 10000); // Above max
         assert_eq!(clamp_cpu_weight(u32::MAX), 10000); // Way above max
@@ -698,8 +693,8 @@ mod tests {
             (memory_mb as u64) * 1024 * 1024
         }
 
-        assert_eq!(memory_mb_to_bytes(1), 1048576);       // 1 MB
-        assert_eq!(memory_mb_to_bytes(256), 268435456);   // 256 MB
+        assert_eq!(memory_mb_to_bytes(1), 1048576); // 1 MB
+        assert_eq!(memory_mb_to_bytes(256), 268435456); // 256 MB
         assert_eq!(memory_mb_to_bytes(1024), 1073741824); // 1 GB
         assert_eq!(memory_mb_to_bytes(4096), 4294967296); // 4 GB
     }

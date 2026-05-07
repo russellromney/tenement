@@ -215,12 +215,11 @@ impl TenantTokenStore {
         let prefix = &token[..8];
 
         // Narrow to candidates matching the prefix (usually 0 or 1 row)
-        let rows = sqlx::query(
-            "SELECT token_hash, tenant_id FROM tenant_tokens WHERE token_prefix = ?",
-        )
-        .bind(prefix)
-        .fetch_all(&self.pool)
-        .await?;
+        let rows =
+            sqlx::query("SELECT token_hash, tenant_id FROM tenant_tokens WHERE token_prefix = ?")
+                .bind(prefix)
+                .fetch_all(&self.pool)
+                .await?;
 
         for row in rows {
             let hash: String = row.get("token_hash");
@@ -341,7 +340,10 @@ impl LogStore {
     /// Create a new log store with batch flushing
     pub fn new(pool: DbPool) -> Arc<Self> {
         let (tx, rx) = mpsc::channel::<LogEntry>(10000);
-        let store = Arc::new(Self { pool: pool.clone(), tx });
+        let store = Arc::new(Self {
+            pool: pool.clone(),
+            tx,
+        });
 
         // Spawn background batch flusher
         tokio::spawn(batch_flusher(pool, rx));
@@ -439,7 +441,12 @@ impl LogStore {
     }
 
     /// Query using FTS5 full-text search
-    async fn query_fts(&self, query: &LogQuery, search: &str, limit: usize) -> Result<Vec<LogEntry>> {
+    async fn query_fts(
+        &self,
+        query: &LogQuery,
+        search: &str,
+        limit: usize,
+    ) -> Result<Vec<LogEntry>> {
         let mut sql = String::from(
             r#"
             SELECT l.id, l.timestamp, l.level, l.process, l.instance_id, l.message
@@ -735,9 +742,11 @@ impl StateStore {
 
     /// Get all persisted instance states (called on startup for recovery)
     pub async fn list(&self) -> Result<Vec<InstanceState>> {
-        let rows = sqlx::query("SELECT instance_id, process_name, id, pid, port, started_at FROM instance_state")
-            .fetch_all(&self.pool)
-            .await?;
+        let rows = sqlx::query(
+            "SELECT instance_id, process_name, id, pid, port, started_at FROM instance_state",
+        )
+        .fetch_all(&self.pool)
+        .await?;
 
         Ok(rows
             .into_iter()
@@ -793,10 +802,11 @@ mod tests {
         let (pool, _dir) = create_test_db().await;
 
         // Verify tables exist
-        let result = sqlx::query("SELECT name FROM sqlite_master WHERE type='table' AND name='logs'")
-            .fetch_optional(&pool)
-            .await
-            .unwrap();
+        let result =
+            sqlx::query("SELECT name FROM sqlite_master WHERE type='table' AND name='logs'")
+                .fetch_optional(&pool)
+                .await
+                .unwrap();
         assert!(result.is_some());
     }
 
@@ -804,10 +814,11 @@ mod tests {
     async fn test_init_db_creates_config_table() {
         let (pool, _dir) = create_test_db().await;
 
-        let result = sqlx::query("SELECT name FROM sqlite_master WHERE type='table' AND name='config'")
-            .fetch_optional(&pool)
-            .await
-            .unwrap();
+        let result =
+            sqlx::query("SELECT name FROM sqlite_master WHERE type='table' AND name='config'")
+                .fetch_optional(&pool)
+                .await
+                .unwrap();
         assert!(result.is_some());
     }
 
@@ -815,10 +826,11 @@ mod tests {
     async fn test_init_db_creates_fts_table() {
         let (pool, _dir) = create_test_db().await;
 
-        let result = sqlx::query("SELECT name FROM sqlite_master WHERE type='table' AND name='logs_fts'")
-            .fetch_optional(&pool)
-            .await
-            .unwrap();
+        let result =
+            sqlx::query("SELECT name FROM sqlite_master WHERE type='table' AND name='logs_fts'")
+                .fetch_optional(&pool)
+                .await
+                .unwrap();
         assert!(result.is_some());
     }
 
@@ -827,10 +839,12 @@ mod tests {
         let (pool, _dir) = create_test_db().await;
 
         // Check for process index
-        let result = sqlx::query("SELECT name FROM sqlite_master WHERE type='index' AND name='idx_logs_process'")
-            .fetch_optional(&pool)
-            .await
-            .unwrap();
+        let result = sqlx::query(
+            "SELECT name FROM sqlite_master WHERE type='index' AND name='idx_logs_process'",
+        )
+        .fetch_optional(&pool)
+        .await
+        .unwrap();
         assert!(result.is_some());
     }
 
@@ -876,7 +890,14 @@ mod tests {
         let store = LogStore::new(pool);
 
         for i in 0..10 {
-            store.push(LogEntry::new("api", "prod", LogLevel::Stdout, format!("msg {}", i))).await;
+            store
+                .push(LogEntry::new(
+                    "api",
+                    "prod",
+                    LogLevel::Stdout,
+                    format!("msg {}", i),
+                ))
+                .await;
         }
 
         tokio::time::sleep(Duration::from_millis(300)).await;
@@ -909,8 +930,22 @@ mod tests {
         let (pool, _dir) = create_test_db().await;
         let store = LogStore::new(pool);
 
-        store.push(LogEntry::new("api", "prod", LogLevel::Stdout, "api msg".to_string())).await;
-        store.push(LogEntry::new("web", "prod", LogLevel::Stdout, "web msg".to_string())).await;
+        store
+            .push(LogEntry::new(
+                "api",
+                "prod",
+                LogLevel::Stdout,
+                "api msg".to_string(),
+            ))
+            .await;
+        store
+            .push(LogEntry::new(
+                "web",
+                "prod",
+                LogLevel::Stdout,
+                "web msg".to_string(),
+            ))
+            .await;
 
         tokio::time::sleep(Duration::from_millis(300)).await;
 
@@ -928,8 +963,22 @@ mod tests {
         let (pool, _dir) = create_test_db().await;
         let store = LogStore::new(pool);
 
-        store.push(LogEntry::new("api", "user1", LogLevel::Stdout, "user1 msg".to_string())).await;
-        store.push(LogEntry::new("api", "user2", LogLevel::Stdout, "user2 msg".to_string())).await;
+        store
+            .push(LogEntry::new(
+                "api",
+                "user1",
+                LogLevel::Stdout,
+                "user1 msg".to_string(),
+            ))
+            .await;
+        store
+            .push(LogEntry::new(
+                "api",
+                "user2",
+                LogLevel::Stdout,
+                "user2 msg".to_string(),
+            ))
+            .await;
 
         tokio::time::sleep(Duration::from_millis(300)).await;
 
@@ -947,8 +996,22 @@ mod tests {
         let (pool, _dir) = create_test_db().await;
         let store = LogStore::new(pool);
 
-        store.push(LogEntry::new("api", "prod", LogLevel::Stdout, "stdout".to_string())).await;
-        store.push(LogEntry::new("api", "prod", LogLevel::Stderr, "stderr".to_string())).await;
+        store
+            .push(LogEntry::new(
+                "api",
+                "prod",
+                LogLevel::Stdout,
+                "stdout".to_string(),
+            ))
+            .await;
+        store
+            .push(LogEntry::new(
+                "api",
+                "prod",
+                LogLevel::Stderr,
+                "stderr".to_string(),
+            ))
+            .await;
 
         tokio::time::sleep(Duration::from_millis(300)).await;
 
@@ -966,10 +1029,38 @@ mod tests {
         let (pool, _dir) = create_test_db().await;
         let store = LogStore::new(pool);
 
-        store.push(LogEntry::new("api", "prod", LogLevel::Stdout, "api prod stdout".to_string())).await;
-        store.push(LogEntry::new("api", "prod", LogLevel::Stderr, "api prod stderr".to_string())).await;
-        store.push(LogEntry::new("api", "staging", LogLevel::Stderr, "api staging stderr".to_string())).await;
-        store.push(LogEntry::new("web", "prod", LogLevel::Stderr, "web prod stderr".to_string())).await;
+        store
+            .push(LogEntry::new(
+                "api",
+                "prod",
+                LogLevel::Stdout,
+                "api prod stdout".to_string(),
+            ))
+            .await;
+        store
+            .push(LogEntry::new(
+                "api",
+                "prod",
+                LogLevel::Stderr,
+                "api prod stderr".to_string(),
+            ))
+            .await;
+        store
+            .push(LogEntry::new(
+                "api",
+                "staging",
+                LogLevel::Stderr,
+                "api staging stderr".to_string(),
+            ))
+            .await;
+        store
+            .push(LogEntry::new(
+                "web",
+                "prod",
+                LogLevel::Stderr,
+                "web prod stderr".to_string(),
+            ))
+            .await;
 
         tokio::time::sleep(Duration::from_millis(300)).await;
 
@@ -990,7 +1081,14 @@ mod tests {
         let store = LogStore::new(pool);
 
         for i in 0..10 {
-            store.push(LogEntry::new("api", "prod", LogLevel::Stdout, format!("msg {}", i))).await;
+            store
+                .push(LogEntry::new(
+                    "api",
+                    "prod",
+                    LogLevel::Stdout,
+                    format!("msg {}", i),
+                ))
+                .await;
         }
 
         tokio::time::sleep(Duration::from_millis(300)).await;
@@ -1021,9 +1119,30 @@ mod tests {
         let (pool, _dir) = create_test_db().await;
         let store = LogStore::new(pool);
 
-        store.push(LogEntry::new("api", "prod", LogLevel::Stdout, "hello world".to_string())).await;
-        store.push(LogEntry::new("api", "prod", LogLevel::Stdout, "goodbye world".to_string())).await;
-        store.push(LogEntry::new("api", "prod", LogLevel::Stdout, "hello there".to_string())).await;
+        store
+            .push(LogEntry::new(
+                "api",
+                "prod",
+                LogLevel::Stdout,
+                "hello world".to_string(),
+            ))
+            .await;
+        store
+            .push(LogEntry::new(
+                "api",
+                "prod",
+                LogLevel::Stdout,
+                "goodbye world".to_string(),
+            ))
+            .await;
+        store
+            .push(LogEntry::new(
+                "api",
+                "prod",
+                LogLevel::Stdout,
+                "hello there".to_string(),
+            ))
+            .await;
 
         tokio::time::sleep(Duration::from_millis(300)).await;
 
@@ -1040,7 +1159,14 @@ mod tests {
         let (pool, _dir) = create_test_db().await;
         let store = LogStore::new(pool);
 
-        store.push(LogEntry::new("api", "prod", LogLevel::Stdout, "hello world".to_string())).await;
+        store
+            .push(LogEntry::new(
+                "api",
+                "prod",
+                LogLevel::Stdout,
+                "hello world".to_string(),
+            ))
+            .await;
 
         tokio::time::sleep(Duration::from_millis(300)).await;
 
@@ -1057,8 +1183,22 @@ mod tests {
         let (pool, _dir) = create_test_db().await;
         let store = LogStore::new(pool);
 
-        store.push(LogEntry::new("api", "prod", LogLevel::Stdout, "hello from api".to_string())).await;
-        store.push(LogEntry::new("web", "prod", LogLevel::Stdout, "hello from web".to_string())).await;
+        store
+            .push(LogEntry::new(
+                "api",
+                "prod",
+                LogLevel::Stdout,
+                "hello from api".to_string(),
+            ))
+            .await;
+        store
+            .push(LogEntry::new(
+                "web",
+                "prod",
+                LogLevel::Stdout,
+                "hello from web".to_string(),
+            ))
+            .await;
 
         tokio::time::sleep(Duration::from_millis(300)).await;
 
@@ -1077,8 +1217,22 @@ mod tests {
         let (pool, _dir) = create_test_db().await;
         let store = LogStore::new(pool);
 
-        store.push(LogEntry::new("api", "prod", LogLevel::Stdout, "error: file not found".to_string())).await;
-        store.push(LogEntry::new("api", "prod", LogLevel::Stdout, "error [500]: internal".to_string())).await;
+        store
+            .push(LogEntry::new(
+                "api",
+                "prod",
+                LogLevel::Stdout,
+                "error: file not found".to_string(),
+            ))
+            .await;
+        store
+            .push(LogEntry::new(
+                "api",
+                "prod",
+                LogLevel::Stdout,
+                "error [500]: internal".to_string(),
+            ))
+            .await;
 
         tokio::time::sleep(Duration::from_millis(300)).await;
 
@@ -1099,7 +1253,14 @@ mod tests {
         let (pool, _dir) = create_test_db().await;
         let store = LogStore::new(pool);
 
-        store.push(LogEntry::new("api", "prod", LogLevel::Stdout, "old msg".to_string())).await;
+        store
+            .push(LogEntry::new(
+                "api",
+                "prod",
+                LogLevel::Stdout,
+                "old msg".to_string(),
+            ))
+            .await;
         tokio::time::sleep(Duration::from_millis(300)).await;
 
         // Rotate with 0 duration should delete all
@@ -1115,7 +1276,14 @@ mod tests {
         let (pool, _dir) = create_test_db().await;
         let store = LogStore::new(pool);
 
-        store.push(LogEntry::new("api", "prod", LogLevel::Stdout, "msg".to_string())).await;
+        store
+            .push(LogEntry::new(
+                "api",
+                "prod",
+                LogLevel::Stdout,
+                "msg".to_string(),
+            ))
+            .await;
         tokio::time::sleep(Duration::from_millis(300)).await;
 
         // Rotate with 1 hour - should keep recent entries
@@ -1133,9 +1301,30 @@ mod tests {
 
         assert_eq!(store.count().await.unwrap(), 0);
 
-        store.push(LogEntry::new("api", "prod", LogLevel::Stdout, "msg1".to_string())).await;
-        store.push(LogEntry::new("api", "prod", LogLevel::Stdout, "msg2".to_string())).await;
-        store.push(LogEntry::new("api", "prod", LogLevel::Stdout, "msg3".to_string())).await;
+        store
+            .push(LogEntry::new(
+                "api",
+                "prod",
+                LogLevel::Stdout,
+                "msg1".to_string(),
+            ))
+            .await;
+        store
+            .push(LogEntry::new(
+                "api",
+                "prod",
+                LogLevel::Stdout,
+                "msg2".to_string(),
+            ))
+            .await;
+        store
+            .push(LogEntry::new(
+                "api",
+                "prod",
+                LogLevel::Stdout,
+                "msg3".to_string(),
+            ))
+            .await;
 
         tokio::time::sleep(Duration::from_millis(300)).await;
 
@@ -1156,11 +1345,17 @@ mod tests {
 
         // Set value
         store.set("test_key", "test_value").await.unwrap();
-        assert_eq!(store.get("test_key").await.unwrap(), Some("test_value".to_string()));
+        assert_eq!(
+            store.get("test_key").await.unwrap(),
+            Some("test_value".to_string())
+        );
 
         // Update value
         store.set("test_key", "new_value").await.unwrap();
-        assert_eq!(store.get("test_key").await.unwrap(), Some("new_value".to_string()));
+        assert_eq!(
+            store.get("test_key").await.unwrap(),
+            Some("new_value".to_string())
+        );
 
         // Delete value
         assert!(store.delete("test_key").await.unwrap());

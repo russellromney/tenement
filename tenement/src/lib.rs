@@ -23,9 +23,9 @@ pub use instance::{Instance, InstanceId, InstanceStatus};
 pub use logs::{LogBuffer, LogEntry, LogLevel, LogQuery};
 pub use metrics::Metrics;
 pub use port_allocator::PortAllocator;
-pub use runtime::{ProcessRuntime, Runtime, RuntimeHandle, RuntimeType, SpawnConfig, VmConfig};
 #[cfg(feature = "sandbox")]
 pub use runtime::SandboxRuntime;
+pub use runtime::{ProcessRuntime, Runtime, RuntimeHandle, RuntimeType, SpawnConfig, VmConfig};
 pub use storage::{calculate_dir_size, format_bytes, StorageInfo};
 pub use store::{
     init_db, ConfigStore, DbPool, DeployLogEntry, DeployLogStore, InstanceState, LogStore,

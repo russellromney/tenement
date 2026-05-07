@@ -141,7 +141,9 @@ mod tests {
 
             // Should only contain URL-safe chars
             assert!(
-                token.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'),
+                token
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'),
                 "Token contains non-URL-safe char: {}",
                 token
             );
@@ -239,7 +241,11 @@ mod tests {
         ];
 
         for bad_hash in malformed {
-            assert!(!verify_token(&token, bad_hash), "Should reject: {}", bad_hash);
+            assert!(
+                !verify_token(&token, bad_hash),
+                "Should reject: {}",
+                bad_hash
+            );
         }
     }
 

@@ -208,10 +208,7 @@ mod http_redirect_tests {
         let app = create_redirect_router(443);
         let server = TestServer::new(app).unwrap();
 
-        let response = server
-            .get("/")
-            .add_header("Host", "example.com:80")
-            .await;
+        let response = server.get("/").add_header("Host", "example.com:80").await;
 
         response.assert_status(StatusCode::PERMANENT_REDIRECT);
         let location = response.header("location");
@@ -322,10 +319,7 @@ mod tls_config_tests {
             config.settings.tls.acme_email,
             Some("test@example.com".to_string())
         );
-        assert_eq!(
-            config.settings.tls.domain,
-            Some("example.com".to_string())
-        );
+        assert_eq!(config.settings.tls.domain, Some("example.com".to_string()));
         assert!(config.settings.tls.staging);
     }
 
@@ -434,7 +428,12 @@ mod cache_dir_tests {
     #[test]
     fn test_cache_dir_nested_creation() {
         let dir = TempDir::new().unwrap();
-        let cache_dir = dir.path().join("var").join("lib").join("tenement").join("acme");
+        let cache_dir = dir
+            .path()
+            .join("var")
+            .join("lib")
+            .join("tenement")
+            .join("acme");
 
         // Create nested directories
         fs::create_dir_all(&cache_dir).unwrap();
@@ -522,11 +521,7 @@ mod tls_validation_tests {
 
     #[test]
     fn test_tls_valid_config() {
-        let result = validate_tls_config(
-            true,
-            Some("test@example.com".to_string()),
-            "example.com",
-        );
+        let result = validate_tls_config(true, Some("test@example.com".to_string()), "example.com");
         assert!(result.is_ok());
     }
 

@@ -193,7 +193,8 @@ mod tests {
 
         // Allocate all remaining ports except port1
         let total = (PORT_MAX - PORT_MIN + 1) as usize;
-        for _ in 0..(total - 2) {  // -2 because we've allocated port2 and want to leave port1 free
+        for _ in 0..(total - 2) {
+            // -2 because we've allocated port2 and want to leave port1 free
             allocator.allocate().await.unwrap();
         }
 
@@ -313,9 +314,7 @@ mod tests {
         let mut handles = vec![];
         for _ in 0..100 {
             let alloc = allocator.clone();
-            handles.push(tokio::spawn(async move {
-                alloc.allocate().await.unwrap()
-            }));
+            handles.push(tokio::spawn(async move { alloc.allocate().await.unwrap() }));
         }
 
         let mut ports = HashSet::new();

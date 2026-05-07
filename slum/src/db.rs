@@ -86,10 +86,11 @@ impl SlumDb {
             std::fs::create_dir_all(parent)?;
         }
 
-        let options = SqliteConnectOptions::from_str(&format!("sqlite:{}?mode=rwc", path.display()))?
-            .create_if_missing(true)
-            .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
-            .busy_timeout(Duration::from_secs(5));
+        let options =
+            SqliteConnectOptions::from_str(&format!("sqlite:{}?mode=rwc", path.display()))?
+                .create_if_missing(true)
+                .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
+                .busy_timeout(Duration::from_secs(5));
 
         let pool = SqlitePoolOptions::new()
             .max_connections(5)
@@ -428,7 +429,9 @@ mod tests {
 
         // Setup
         db.add_server(&test_server("srv1")).await.unwrap();
-        db.add_tenant(&test_tenant("tenant1", "srv1")).await.unwrap();
+        db.add_tenant(&test_tenant("tenant1", "srv1"))
+            .await
+            .unwrap();
 
         // Route existing domain
         let result = db.route("tenant1.app.example.com").await.unwrap();
@@ -462,9 +465,21 @@ mod tests {
 
     #[test]
     fn test_server_status_from_str() {
-        assert_eq!("online".parse::<ServerStatus>().unwrap(), ServerStatus::Online);
-        assert_eq!("offline".parse::<ServerStatus>().unwrap(), ServerStatus::Offline);
-        assert_eq!("degraded".parse::<ServerStatus>().unwrap(), ServerStatus::Degraded);
-        assert_eq!("invalid".parse::<ServerStatus>().unwrap(), ServerStatus::Unknown);
+        assert_eq!(
+            "online".parse::<ServerStatus>().unwrap(),
+            ServerStatus::Online
+        );
+        assert_eq!(
+            "offline".parse::<ServerStatus>().unwrap(),
+            ServerStatus::Offline
+        );
+        assert_eq!(
+            "degraded".parse::<ServerStatus>().unwrap(),
+            ServerStatus::Degraded
+        );
+        assert_eq!(
+            "invalid".parse::<ServerStatus>().unwrap(),
+            ServerStatus::Unknown
+        );
     }
 }

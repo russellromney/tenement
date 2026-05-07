@@ -75,10 +75,7 @@ mod linux_impl {
 
                 // Create new PID and Mount namespaces
                 unshare(CloneFlags::CLONE_NEWPID | CloneFlags::CLONE_NEWNS).map_err(|e| {
-                    std::io::Error::new(
-                        std::io::ErrorKind::Other,
-                        format!("unshare failed: {}", e),
-                    )
+                    std::io::Error::new(std::io::ErrorKind::Other, format!("unshare failed: {}", e))
                 })?;
 
                 // Make mount namespace private (don't propagate mounts)

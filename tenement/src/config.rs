@@ -28,7 +28,6 @@ pub struct Config {
     pub instances: HashMap<String, Vec<String>>,
 }
 
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Settings {
     /// Global data directory for tenement state (DB, tokens, certs).
@@ -145,7 +144,8 @@ fn reject_tilde(path: &Path, source: &str) -> Result<()> {
         anyhow::bail!(
             "{} path {:?} starts with '~'. Tilde is not expanded; \
              pass an absolute path (e.g. $HOME/.local/share/tenement) instead.",
-            source, path
+            source,
+            path
         );
     }
     Ok(())
@@ -226,7 +226,6 @@ pub struct ProcessConfig {
     pub request_timeout: u64,
 
     // --- Resource limits (cgroups v2 on Linux) ---
-
     /// Memory limit in MB (0 = unlimited)
     /// Applied via cgroups v2 on Linux for process/namespace/sandbox isolation.
     /// For Firecracker/QEMU VMs, this sets the VM memory.
@@ -241,7 +240,6 @@ pub struct ProcessConfig {
     pub cpu_shares: Option<u32>,
 
     // --- Storage limits ---
-
     /// Storage quota in MB (None = unlimited)
     /// Soft limit: exceeding quota triggers warnings and metrics but doesn't kill the process.
     #[serde(default)]
@@ -254,7 +252,6 @@ pub struct ProcessConfig {
     pub storage_persist: bool,
 
     // --- Firecracker/QEMU-specific fields ---
-
     /// Path to kernel image (required for firecracker runtime)
     #[serde(default)]
     pub kernel: Option<PathBuf>,
@@ -387,7 +384,8 @@ impl Config {
                 anyhow::bail!(
                     "Instance references undefined service '{}'. \
                     Define it in [service.{}] first.",
-                    service_name, service_name
+                    service_name,
+                    service_name
                 );
             }
         }
@@ -505,7 +503,14 @@ impl ProcessConfig {
 
     /// Interpolate variables in a string
     /// Supports: {name}, {id}, {data_dir}, {socket}, {port}
-    pub fn interpolate(&self, template: &str, name: &str, id: &str, data_dir: &Path, port: Option<u16>) -> String {
+    pub fn interpolate(
+        &self,
+        template: &str,
+        name: &str,
+        id: &str,
+        data_dir: &Path,
+        port: Option<u16>,
+    ) -> String {
         let socket = self.socket_path(name, id);
         let port_str = port.map(|p| p.to_string()).unwrap_or_default();
         template
@@ -518,19 +523,29 @@ impl ProcessConfig {
 
     /// Get the socket path for an instance (used for Unix socket mode)
     pub fn socket_path(&self, name: &str, id: &str) -> PathBuf {
-        let path = self.socket
-            .replace("{name}", name)
-            .replace("{id}", id);
+        let path = self.socket.replace("{name}", name).replace("{id}", id);
         PathBuf::from(path)
     }
 
     /// Get interpolated command
-    pub fn command_interpolated(&self, name: &str, id: &str, data_dir: &Path, port: Option<u16>) -> String {
+    pub fn command_interpolated(
+        &self,
+        name: &str,
+        id: &str,
+        data_dir: &Path,
+        port: Option<u16>,
+    ) -> String {
         self.interpolate(&self.command, name, id, data_dir, port)
     }
 
     /// Get interpolated args
-    pub fn args_interpolated(&self, name: &str, id: &str, data_dir: &Path, port: Option<u16>) -> Vec<String> {
+    pub fn args_interpolated(
+        &self,
+        name: &str,
+        id: &str,
+        data_dir: &Path,
+        port: Option<u16>,
+    ) -> Vec<String> {
         self.args
             .iter()
             .map(|arg| self.interpolate(arg, name, id, data_dir, port))
@@ -538,7 +553,13 @@ impl ProcessConfig {
     }
 
     /// Get interpolated environment variables
-    pub fn env_interpolated(&self, name: &str, id: &str, data_dir: &Path, port: Option<u16>) -> HashMap<String, String> {
+    pub fn env_interpolated(
+        &self,
+        name: &str,
+        id: &str,
+        data_dir: &Path,
+        port: Option<u16>,
+    ) -> HashMap<String, String> {
         self.env
             .iter()
             .map(|(k, v)| (k.clone(), self.interpolate(v, name, id, data_dir, port)))
@@ -624,8 +645,14 @@ SOCKET = "{socket}"
         assert_eq!(socket, PathBuf::from("/tmp/tenement/api-user123.sock"));
 
         let env = api.env_interpolated("api", "user123", &data_dir, None);
-        assert_eq!(env.get("DB"), Some(&"/var/lib/tenement/user123/app.db".to_string()));
-        assert_eq!(env.get("SOCKET"), Some(&"/tmp/tenement/api-user123.sock".to_string()));
+        assert_eq!(
+            env.get("DB"),
+            Some(&"/var/lib/tenement/user123/app.db".to_string())
+        );
+        assert_eq!(
+            env.get("SOCKET"),
+            Some(&"/tmp/tenement/api-user123.sock".to_string())
+        );
     }
 
     #[test]
@@ -946,8 +973,14 @@ vsock_port = 6000
         let secure = config.get_service("secure").unwrap();
 
         assert_eq!(secure.isolation, RuntimeType::Firecracker);
-        assert_eq!(secure.kernel, Some(PathBuf::from("/var/lib/tenement/vmlinux")));
-        assert_eq!(secure.rootfs, Some(PathBuf::from("/var/lib/tenement/worker.ext4")));
+        assert_eq!(
+            secure.kernel,
+            Some(PathBuf::from("/var/lib/tenement/vmlinux"))
+        );
+        assert_eq!(
+            secure.rootfs,
+            Some(PathBuf::from("/var/lib/tenement/worker.ext4"))
+        );
         assert_eq!(secure.memory_mb, 512);
         assert_eq!(secure.vcpus, 2);
         assert_eq!(secure.vsock_port, 6000);
@@ -1513,7 +1546,10 @@ socket = "/tmp/api-{id}.sock"
         let config = Config::from_str(config_str).unwrap();
         let api = config.get_service("api").unwrap();
 
-        assert_eq!(api.socket_path("api", "test"), PathBuf::from("/tmp/api-test.sock"));
+        assert_eq!(
+            api.socket_path("api", "test"),
+            PathBuf::from("/tmp/api-test.sock")
+        );
     }
 
     #[test]

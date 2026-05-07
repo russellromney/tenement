@@ -197,11 +197,18 @@ pub fn run(
 
         if processes.is_empty() {
             println!("Note: No services defined in tenement.toml");
-            println!("      Generating basic Caddyfile with *.{} wildcard only", domain);
+            println!(
+                "      Generating basic Caddyfile with *.{} wildcard only",
+                domain
+            );
             println!();
             generate_caddyfile(&domain, port)
         } else {
-            println!("Found {} service(s): {}", processes.len(), processes.join(", "));
+            println!(
+                "Found {} service(s): {}",
+                processes.len(),
+                processes.join(", ")
+            );
             println!("Generating per-process wildcards for instance routing.");
             println!();
             generate_caddyfile_with_processes(&domain, port, &processes, provider)
@@ -246,7 +253,10 @@ pub fn run(
             println!("\n# To use this config:");
             println!("# 1. Save to Caddyfile or /etc/caddy/Caddyfile");
             println!("# 2. Run: caddy run --config Caddyfile");
-            println!("# Or use: ten caddy --domain {} --output /etc/caddy/Caddyfile", domain);
+            println!(
+                "# Or use: ten caddy --domain {} --output /etc/caddy/Caddyfile",
+                domain
+            );
 
             // Print DNS setup instructions if using per-process wildcards
             if let Some(ref provider) = dns_provider {
@@ -303,10 +313,7 @@ fn install_caddy() -> Result<()> {
         // Try dnf (Fedora/RHEL)
         if Command::new("which").arg("dnf").output()?.status.success() {
             println!("  Using dnf package manager...");
-            run_command(
-                "dnf",
-                &["install", "-y", "'dnf-command(copr)'"],
-            )?;
+            run_command("dnf", &["install", "-y", "'dnf-command(copr)'"])?;
             run_command("dnf", &["copr", "enable", "@caddy/caddy", "-y"])?;
             run_command("dnf", &["install", "-y", "caddy"])?;
             println!("\n[OK] Caddy installed successfully!");
@@ -324,7 +331,12 @@ fn install_caddy() -> Result<()> {
         }
 
         // Try pacman (Arch)
-        if Command::new("which").arg("pacman").output()?.status.success() {
+        if Command::new("which")
+            .arg("pacman")
+            .output()?
+            .status
+            .success()
+        {
             println!("  Using pacman package manager...");
             run_command("pacman", &["-S", "--noconfirm", "caddy"])?;
             println!("\n[OK] Caddy installed successfully!");
@@ -506,7 +518,8 @@ mod tests {
     #[test]
     fn test_generate_caddyfile_with_processes_basic() {
         let processes = vec!["api".to_string(), "web".to_string()];
-        let caddyfile = generate_caddyfile_with_processes("example.com", 8080, &processes, "cloudflare");
+        let caddyfile =
+            generate_caddyfile_with_processes("example.com", 8080, &processes, "cloudflare");
 
         // Check main domain block
         assert!(caddyfile.contains("example.com {"));
@@ -526,7 +539,8 @@ mod tests {
     #[test]
     fn test_generate_caddyfile_with_processes_empty() {
         let processes: Vec<String> = vec![];
-        let caddyfile = generate_caddyfile_with_processes("example.com", 8080, &processes, "cloudflare");
+        let caddyfile =
+            generate_caddyfile_with_processes("example.com", 8080, &processes, "cloudflare");
 
         // Should have main domain and single wildcard only
         assert!(caddyfile.contains("example.com {"));
@@ -539,7 +553,8 @@ mod tests {
     #[test]
     fn test_generate_caddyfile_with_processes_route53() {
         let processes = vec!["api".to_string()];
-        let caddyfile = generate_caddyfile_with_processes("example.com", 8080, &processes, "route53");
+        let caddyfile =
+            generate_caddyfile_with_processes("example.com", 8080, &processes, "route53");
 
         // Check Route53 DNS config
         assert!(caddyfile.contains("dns route53"));
@@ -549,7 +564,8 @@ mod tests {
     #[test]
     fn test_generate_caddyfile_with_processes_has_instructions() {
         let processes = vec!["api".to_string()];
-        let caddyfile = generate_caddyfile_with_processes("example.com", 8080, &processes, "cloudflare");
+        let caddyfile =
+            generate_caddyfile_with_processes("example.com", 8080, &processes, "cloudflare");
 
         // Should have DNS-01 instructions
         assert!(caddyfile.contains("DNS-01 challenge requires DNS provider"));

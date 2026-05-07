@@ -13,8 +13,8 @@
 use axum_test::TestServer;
 use hyper_util::{client::legacy::Client, rt::TokioExecutor};
 use std::collections::HashMap;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use tempfile::TempDir;
 
 /// Global counter for generating unique instance IDs across parallel tests
@@ -25,8 +25,8 @@ fn unique_id(prefix: &str) -> String {
     let id = INSTANCE_COUNTER.fetch_add(1, Ordering::SeqCst);
     format!("{}_{}", prefix, id)
 }
-use tenement::runtime::RuntimeType;
 use tenement::config::ProcessConfig;
+use tenement::runtime::RuntimeType;
 use tenement::{init_db, Config, ConfigStore, Hypervisor, TokenStore};
 use tenement_cli::server::{create_router, AppState, TlsStatus};
 
@@ -175,7 +175,10 @@ async fn test_spawn_appears_in_api_list() {
 
     // Spawn an instance
     let socket = hypervisor.spawn("api", &inst_id).await.unwrap();
-    assert!(wait_for_socket(&socket, 2000).await, "Socket should be created");
+    assert!(
+        wait_for_socket(&socket, 2000).await,
+        "Socket should be created"
+    );
 
     // Now the instance should appear in the API
     let response = server
@@ -201,7 +204,10 @@ async fn test_stop_removes_from_api_list() {
 
     // Spawn an instance
     let socket = hypervisor.spawn("api", &inst_id).await.unwrap();
-    assert!(wait_for_socket(&socket, 2000).await, "Socket should be created");
+    assert!(
+        wait_for_socket(&socket, 2000).await,
+        "Socket should be created"
+    );
 
     // Verify it's in the list
     let response = server
@@ -238,7 +244,10 @@ async fn test_spawn_logs_captured() {
 
     // Spawn instance that outputs logs
     let socket = hypervisor.spawn("api", &inst_id).await.unwrap();
-    assert!(wait_for_socket(&socket, 2000).await, "Socket should be created");
+    assert!(
+        wait_for_socket(&socket, 2000).await,
+        "Socket should be created"
+    );
 
     // Wait a bit for logs to be captured
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
@@ -280,8 +289,12 @@ async fn test_logs_filtering_with_spawned_instances() {
 
     // Manually push some logs to test filtering
     let log_buffer = hypervisor.log_buffer();
-    log_buffer.push_stdout("api", "user1", "api user1 log".to_string()).await;
-    log_buffer.push_stdout("api", "user2", "api user2 log".to_string()).await;
+    log_buffer
+        .push_stdout("api", "user1", "api user1 log".to_string())
+        .await;
+    log_buffer
+        .push_stdout("api", "user2", "api user2 log".to_string())
+        .await;
 
     // Filter by instance id
     let response = server
@@ -313,7 +326,10 @@ async fn test_metrics_update_on_spawn() {
     let response = server.get("/metrics").await;
     response.assert_status_ok();
     let text = response.text();
-    assert!(text.contains("tenement_instances_up 0"), "Should start with 0 instances");
+    assert!(
+        text.contains("tenement_instances_up 0"),
+        "Should start with 0 instances"
+    );
 
     // Spawn an instance
     let socket = hypervisor.spawn("api", &inst1).await.unwrap();
@@ -322,7 +338,10 @@ async fn test_metrics_update_on_spawn() {
     // Check metrics updated
     let response = server.get("/metrics").await;
     let text = response.text();
-    assert!(text.contains("tenement_instances_up 1"), "Should have 1 instance after spawn");
+    assert!(
+        text.contains("tenement_instances_up 1"),
+        "Should have 1 instance after spawn"
+    );
 
     // Spawn another instance
     let socket2 = hypervisor.spawn("api", &inst2).await.unwrap();
@@ -331,7 +350,10 @@ async fn test_metrics_update_on_spawn() {
     // Check metrics updated again
     let response = server.get("/metrics").await;
     let text = response.text();
-    assert!(text.contains("tenement_instances_up 2"), "Should have 2 instances");
+    assert!(
+        text.contains("tenement_instances_up 2"),
+        "Should have 2 instances"
+    );
 
     // Cleanup
     hypervisor.stop("api", &inst1).await.ok();
@@ -364,7 +386,10 @@ async fn test_metrics_update_on_stop() {
     // Verify metrics decremented
     let response = server.get("/metrics").await;
     let text = response.text();
-    assert!(text.contains("tenement_instances_up 1"), "Should have 1 instance after stopping one");
+    assert!(
+        text.contains("tenement_instances_up 1"),
+        "Should have 1 instance after stopping one"
+    );
 
     // Stop the other instance
     hypervisor.stop("api", &inst2).await.unwrap();
@@ -372,7 +397,10 @@ async fn test_metrics_update_on_stop() {
     // Verify back to 0
     let response = server.get("/metrics").await;
     let text = response.text();
-    assert!(text.contains("tenement_instances_up 0"), "Should have 0 instances after stopping all");
+    assert!(
+        text.contains("tenement_instances_up 0"),
+        "Should have 0 instances after stopping all"
+    );
 }
 
 // =============================================================================
@@ -411,7 +439,10 @@ async fn test_restart_increments_counter() {
         .add_header("Authorization", format!("Bearer {}", token))
         .await;
     let json: Vec<serde_json::Value> = response.json();
-    assert_eq!(json[0]["restarts"], 1, "Restart count should be 1 after restart");
+    assert_eq!(
+        json[0]["restarts"], 1,
+        "Restart count should be 1 after restart"
+    );
 
     // Restart again
     hypervisor.restart("api", &inst_id).await.unwrap();
@@ -422,7 +453,10 @@ async fn test_restart_increments_counter() {
         .add_header("Authorization", format!("Bearer {}", token))
         .await;
     let json: Vec<serde_json::Value> = response.json();
-    assert_eq!(json[0]["restarts"], 2, "Restart count should be 2 after second restart");
+    assert_eq!(
+        json[0]["restarts"], 2,
+        "Restart count should be 2 after second restart"
+    );
 
     // Cleanup
     hypervisor.stop("api", &inst_id).await.ok();
@@ -447,7 +481,10 @@ async fn test_health_status_in_api() {
         .await;
     let json: Vec<serde_json::Value> = response.json();
     // HealthStatus::to_string() returns lowercase
-    assert_eq!(json[0]["health"], "unknown", "Initial health should be unknown");
+    assert_eq!(
+        json[0]["health"], "unknown",
+        "Initial health should be unknown"
+    );
 
     // Trigger health check (with socket present, should be healthy)
     let status = hypervisor.check_health("api", &inst_id).await;
@@ -496,7 +533,8 @@ async fn test_multiple_instances_in_api() {
     assert_eq!(json.len(), 3, "Should have 3 instances");
 
     // Verify all instance IDs are present
-    let ids: Vec<String> = json.iter()
+    let ids: Vec<String> = json
+        .iter()
         .map(|j| j["id"].as_str().unwrap().to_string())
         .collect();
     assert!(ids.contains(&format!("api:{}", inst1)));
@@ -540,7 +578,10 @@ async fn test_uptime_in_api_response() {
         .await;
     let json: Vec<serde_json::Value> = response.json();
     let later_uptime = json[0]["uptime_secs"].as_u64().unwrap();
-    assert!(later_uptime >= 2, "Uptime should have increased to at least 2 seconds");
+    assert!(
+        later_uptime >= 2,
+        "Uptime should have increased to at least 2 seconds"
+    );
 
     // Cleanup
     hypervisor.stop("api", &inst_id).await.ok();
@@ -561,8 +602,11 @@ async fn test_spawn_invalid_process_returns_error() {
     let result = hypervisor.spawn("nonexistent", "test").await;
     assert!(result.is_err(), "Spawning invalid process should fail");
     let err = result.unwrap_err().to_string();
-    assert!(err.contains("not found") || err.contains("not configured") || err.contains("Unknown"),
-        "Error should indicate process not found: {}", err);
+    assert!(
+        err.contains("not found") || err.contains("not configured") || err.contains("Unknown"),
+        "Error should indicate process not found: {}",
+        err
+    );
 }
 
 /// Test that stopping a non-existent instance returns an error
@@ -574,7 +618,10 @@ async fn test_stop_nonexistent_instance_returns_error() {
 
     // Try to stop an instance that doesn't exist
     let result = hypervisor.stop("api", "nonexistent").await;
-    assert!(result.is_err(), "Stopping non-existent instance should fail");
+    assert!(
+        result.is_err(),
+        "Stopping non-existent instance should fail"
+    );
 }
 
 /// Test that restarting a non-existent instance spawns it (restart = stop + spawn)
@@ -587,11 +634,17 @@ async fn test_restart_nonexistent_instance_spawns_it() {
 
     // Restart non-existent instance - should spawn it (restart = stop + spawn)
     let result = hypervisor.restart("api", &inst_id).await;
-    assert!(result.is_ok(), "Restart of non-existent instance should spawn it");
+    assert!(
+        result.is_ok(),
+        "Restart of non-existent instance should spawn it"
+    );
 
     // Wait for socket
     let socket = result.unwrap();
-    assert!(wait_for_socket(&socket, 2000).await, "Socket should be created");
+    assert!(
+        wait_for_socket(&socket, 2000).await,
+        "Socket should be created"
+    );
 
     // Verify instance now exists
     let response = server
@@ -686,10 +739,7 @@ async fn test_subdomain_no_instances_returns_503() {
     let (server, _token, _hypervisor, _db_dir) = setup_with_process("api", &script).await;
 
     // Request to weighted subdomain (api.example.com) with no instances running
-    let response = server
-        .get("/")
-        .add_header("Host", "api.example.com")
-        .await;
+    let response = server.get("/").add_header("Host", "api.example.com").await;
 
     response.assert_status(axum::http::StatusCode::SERVICE_UNAVAILABLE);
     // Error message is sanitized for unauthenticated users (Phase Break Stuff)
@@ -704,10 +754,7 @@ async fn test_root_domain_serves_dashboard() {
     let (server, _token, _hypervisor, _db_dir) = setup_with_process("api", &script).await;
 
     // Request to root domain should serve dashboard
-    let response = server
-        .get("/")
-        .add_header("Host", "example.com")
-        .await;
+    let response = server.get("/").add_header("Host", "example.com").await;
 
     response.assert_status_ok();
     response.assert_text_contains("tenement dashboard");
@@ -745,9 +792,18 @@ async fn test_concurrent_spawns_succeed() {
     let socket3 = r3.unwrap();
 
     // Wait for all sockets
-    assert!(wait_for_socket(&socket1, 2000).await, "Socket 1 not created");
-    assert!(wait_for_socket(&socket2, 2000).await, "Socket 2 not created");
-    assert!(wait_for_socket(&socket3, 2000).await, "Socket 3 not created");
+    assert!(
+        wait_for_socket(&socket1, 2000).await,
+        "Socket 1 not created"
+    );
+    assert!(
+        wait_for_socket(&socket2, 2000).await,
+        "Socket 2 not created"
+    );
+    assert!(
+        wait_for_socket(&socket3, 2000).await,
+        "Socket 3 not created"
+    );
 
     // Verify all 3 in API
     let response = server
@@ -819,9 +875,15 @@ async fn test_get_storage_info_for_instance() {
 
     // Query storage info directly from hypervisor
     let storage_info = hypervisor.get_storage_info("api", &inst_id).await;
-    assert!(storage_info.is_some(), "Should have storage info for running instance");
+    assert!(
+        storage_info.is_some(),
+        "Should have storage info for running instance"
+    );
     let info = storage_info.unwrap();
-    assert!(info.path.exists() || info.used_bytes == 0, "Storage path should exist or be empty");
+    assert!(
+        info.path.exists() || info.used_bytes == 0,
+        "Storage path should exist or be empty"
+    );
 
     // Cleanup
     hypervisor.stop("api", &inst_id).await.ok();
@@ -835,7 +897,10 @@ async fn test_get_storage_info_nonexistent_returns_none() {
     let (_server, _token, hypervisor, _db_dir) = setup_with_process("api", &script).await;
 
     let storage_info = hypervisor.get_storage_info("api", "nonexistent").await;
-    assert!(storage_info.is_none(), "Should return None for non-existent instance");
+    assert!(
+        storage_info.is_none(),
+        "Should return None for non-existent instance"
+    );
 }
 
 // =============================================================================
@@ -866,7 +931,10 @@ exit 0
 
     // Spawn - it will exit immediately
     let socket = hypervisor.spawn("api", &inst_id).await.unwrap();
-    assert!(wait_for_socket(&socket, 2000).await, "Socket should be created before exit");
+    assert!(
+        wait_for_socket(&socket, 2000).await,
+        "Socket should be created before exit"
+    );
 
     // Wait for process to exit and be detected
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
@@ -888,8 +956,14 @@ async fn test_has_process_check() {
     let (_server, _token, hypervisor, _db_dir) = setup_with_process("api", &script).await;
 
     assert!(hypervisor.has_process("api"), "Should have 'api' process");
-    assert!(!hypervisor.has_process("nonexistent"), "Should not have 'nonexistent' process");
-    assert!(!hypervisor.has_process(""), "Should not have empty process name");
+    assert!(
+        !hypervisor.has_process("nonexistent"),
+        "Should not have 'nonexistent' process"
+    );
+    assert!(
+        !hypervisor.has_process(""),
+        "Should not have empty process name"
+    );
 }
 
 // =============================================================================
@@ -914,7 +988,10 @@ async fn test_weight_in_api_response() {
         .add_header("Authorization", format!("Bearer {}", token))
         .await;
     let json: Vec<serde_json::Value> = response.json();
-    assert!(json[0].get("weight").is_some(), "Response should include weight");
+    assert!(
+        json[0].get("weight").is_some(),
+        "Response should include weight"
+    );
 
     // Cleanup
     hypervisor.stop("api", &inst_id).await.ok();
@@ -934,10 +1011,18 @@ async fn test_port_released_after_stop() {
     // Spawn and stop multiple times - should not exhaust ports
     for i in 0..5 {
         let inst_id = unique_id("port");
-        let socket = hypervisor.spawn("api", &inst_id).await
+        let socket = hypervisor
+            .spawn("api", &inst_id)
+            .await
             .expect(&format!("Spawn {} should succeed", i));
-        assert!(wait_for_socket(&socket, 2000).await, "Socket {} should be created", i);
-        hypervisor.stop("api", &inst_id).await
+        assert!(
+            wait_for_socket(&socket, 2000).await,
+            "Socket {} should be created",
+            i
+        );
+        hypervisor
+            .stop("api", &inst_id)
+            .await
             .expect(&format!("Stop {} should succeed", i));
     }
     // If we got here without running out of ports, the test passes
