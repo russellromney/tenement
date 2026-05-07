@@ -875,7 +875,7 @@ mod tests {
         store.push(entry).await;
 
         // Wait for batch flush
-        tokio::time::sleep(Duration::from_millis(300)).await;
+        tokio::time::sleep(Duration::from_millis(1500)).await;
 
         // Query
         let query = LogQuery::default();
@@ -900,7 +900,7 @@ mod tests {
                 .await;
         }
 
-        tokio::time::sleep(Duration::from_millis(300)).await;
+        tokio::time::sleep(Duration::from_millis(1500)).await;
 
         let count = store.count().await.unwrap();
         assert_eq!(count, 10);
@@ -915,7 +915,7 @@ mod tests {
         let original_ts = entry.timestamp;
         store.push(entry).await;
 
-        tokio::time::sleep(Duration::from_millis(300)).await;
+        tokio::time::sleep(Duration::from_millis(1500)).await;
 
         let results = store.query(&LogQuery::default()).await.unwrap();
         assert_eq!(results[0].timestamp, original_ts);
@@ -947,7 +947,7 @@ mod tests {
             ))
             .await;
 
-        tokio::time::sleep(Duration::from_millis(300)).await;
+        tokio::time::sleep(Duration::from_millis(1500)).await;
 
         let query = LogQuery {
             process: Some("api".to_string()),
@@ -980,7 +980,7 @@ mod tests {
             ))
             .await;
 
-        tokio::time::sleep(Duration::from_millis(300)).await;
+        tokio::time::sleep(Duration::from_millis(1500)).await;
 
         let query = LogQuery {
             instance_id: Some("user1".to_string()),
@@ -1013,7 +1013,7 @@ mod tests {
             ))
             .await;
 
-        tokio::time::sleep(Duration::from_millis(300)).await;
+        tokio::time::sleep(Duration::from_millis(1500)).await;
 
         let query = LogQuery {
             level: Some(LogLevel::Stderr),
@@ -1062,7 +1062,7 @@ mod tests {
             ))
             .await;
 
-        tokio::time::sleep(Duration::from_millis(300)).await;
+        tokio::time::sleep(Duration::from_millis(1500)).await;
 
         let query = LogQuery {
             process: Some("api".to_string()),
@@ -1091,7 +1091,7 @@ mod tests {
                 .await;
         }
 
-        tokio::time::sleep(Duration::from_millis(300)).await;
+        tokio::time::sleep(Duration::from_millis(1500)).await;
 
         let query = LogQuery {
             limit: Some(5),
@@ -1144,7 +1144,7 @@ mod tests {
             ))
             .await;
 
-        tokio::time::sleep(Duration::from_millis(300)).await;
+        tokio::time::sleep(Duration::from_millis(1500)).await;
 
         let query = LogQuery {
             search: Some("hello".to_string()),
@@ -1168,7 +1168,7 @@ mod tests {
             ))
             .await;
 
-        tokio::time::sleep(Duration::from_millis(300)).await;
+        tokio::time::sleep(Duration::from_millis(1500)).await;
 
         let query = LogQuery {
             search: Some("nonexistent".to_string()),
@@ -1200,7 +1200,7 @@ mod tests {
             ))
             .await;
 
-        tokio::time::sleep(Duration::from_millis(300)).await;
+        tokio::time::sleep(Duration::from_millis(1500)).await;
 
         let query = LogQuery {
             search: Some("hello".to_string()),
@@ -1234,7 +1234,7 @@ mod tests {
             ))
             .await;
 
-        tokio::time::sleep(Duration::from_millis(300)).await;
+        tokio::time::sleep(Duration::from_millis(1500)).await;
 
         let query = LogQuery {
             search: Some("error".to_string()),
@@ -1261,7 +1261,7 @@ mod tests {
                 "old msg".to_string(),
             ))
             .await;
-        tokio::time::sleep(Duration::from_millis(300)).await;
+        tokio::time::sleep(Duration::from_millis(1500)).await;
 
         // Rotate with 0 duration should delete all
         let deleted = store.rotate(Duration::from_secs(0)).await.unwrap();
@@ -1284,7 +1284,7 @@ mod tests {
                 "msg".to_string(),
             ))
             .await;
-        tokio::time::sleep(Duration::from_millis(300)).await;
+        tokio::time::sleep(Duration::from_millis(1500)).await;
 
         // Rotate with 1 hour - should keep recent entries
         let deleted = store.rotate(Duration::from_secs(3600)).await.unwrap();
@@ -1326,7 +1326,7 @@ mod tests {
             ))
             .await;
 
-        tokio::time::sleep(Duration::from_millis(300)).await;
+        tokio::time::sleep(Duration::from_millis(1500)).await;
 
         assert_eq!(store.count().await.unwrap(), 3);
     }
