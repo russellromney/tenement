@@ -89,6 +89,8 @@ jobs:
           npm run build
       - name: Copy dashboard dist into CLI crate
         run: cp -r dashboard/dist cli/dashboard-dist
+      - name: Install uv (for the python-fastapi scenario)
+        uses: astral-sh/setup-uv@v3
       - name: Build ten binary (debug — faster than release for CI smoke)
         run: cargo build -p tenement-cli --bin ten
       - name: Run E2E script
