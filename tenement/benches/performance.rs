@@ -35,6 +35,8 @@ fn test_config_with_process(name: &str, command: &str) -> Config {
         memory_mb: 256,
         vcpus: 1,
         vsock_port: 5000,
+        storage_quota_mb: None,
+        storage_persist: false,
     };
 
     config.service.insert(name.to_string(), process);
