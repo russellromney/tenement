@@ -7,6 +7,7 @@ dependencies = [
     "uvicorn>=0.27.0",
 ]
 
-[build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
+# Single-file example (app.py at repo root, no package layout). Tell uv not
+# to try to build/install the project itself; just sync the dependencies.
+[tool.uv]
+package = false
