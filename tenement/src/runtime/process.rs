@@ -124,7 +124,7 @@ mod tests {
 
     #[test]
     fn test_process_runtime_default() {
-        let runtime = ProcessRuntime::default();
+        let runtime = ProcessRuntime;
         assert!(runtime.is_available());
         assert_eq!(runtime.runtime_type(), RuntimeType::Process);
     }
@@ -168,12 +168,11 @@ mod tests {
     #[tokio::test]
     async fn test_process_runtime_spawn_with_env() {
         let runtime = ProcessRuntime::new();
-        let mut config = test_spawn_config(
-            "env",
-            vec![],
-            PathBuf::from("/tmp/test-process-env.sock"),
-        );
-        config.env.insert("MY_VAR".to_string(), "my_value".to_string());
+        let mut config =
+            test_spawn_config("env", vec![], PathBuf::from("/tmp/test-process-env.sock"));
+        config
+            .env
+            .insert("MY_VAR".to_string(), "my_value".to_string());
 
         let handle = runtime.spawn(&config).await.unwrap();
         assert_eq!(handle.runtime_type(), RuntimeType::Process);
@@ -291,11 +290,7 @@ mod tests {
     #[tokio::test]
     async fn test_process_handle_kill() {
         let runtime = ProcessRuntime::new();
-        let config = test_spawn_config(
-            "sleep",
-            vec!["60"],
-            PathBuf::from("/tmp/test-kill.sock"),
-        );
+        let config = test_spawn_config("sleep", vec!["60"], PathBuf::from("/tmp/test-kill.sock"));
 
         let mut handle = runtime.spawn(&config).await.unwrap();
         assert!(handle.is_running().await);

@@ -105,7 +105,10 @@ pub fn install(
             println!("7. Generate Caddyfile at /etc/caddy/Caddyfile");
             println!("8. Enable Caddy systemd service");
             if let Some(ref provider) = dns_provider {
-                println!("   - Using DNS provider '{}' for per-process wildcards", provider);
+                println!(
+                    "   - Using DNS provider '{}' for per-process wildcards",
+                    provider
+                );
             }
         }
         println!("\n=== Generated systemd unit ===\n");
@@ -121,7 +124,8 @@ pub fn install(
         anyhow::bail!(
             "Installation requires root privileges.\n\
             Run with sudo: sudo ten install --domain {} --port {}",
-            domain, port
+            domain,
+            port
         );
     }
 
@@ -130,8 +134,7 @@ pub fn install(
     // Step 1: Copy binary
     let current_exe = std::env::current_exe()?;
     println!("  Copying binary to {}...", BINARY_INSTALL_PATH);
-    std::fs::copy(&current_exe, BINARY_INSTALL_PATH)
-        .context("Failed to copy binary")?;
+    std::fs::copy(&current_exe, BINARY_INSTALL_PATH).context("Failed to copy binary")?;
 
     // Make binary executable
     #[cfg(unix)]
@@ -144,22 +147,18 @@ pub fn install(
 
     // Step 2: Create config directory and copy config
     println!("  Creating config directory {}...", CONFIG_DIR);
-    std::fs::create_dir_all(CONFIG_DIR)
-        .context("Failed to create config directory")?;
+    std::fs::create_dir_all(CONFIG_DIR).context("Failed to create config directory")?;
 
     println!("  Copying config to {}...", dest_config.display());
-    std::fs::copy(&config_path, &dest_config)
-        .context("Failed to copy config")?;
+    std::fs::copy(&config_path, &dest_config).context("Failed to copy config")?;
 
     // Step 3: Create data directory
     println!("  Creating data directory {}...", DATA_DIR);
-    std::fs::create_dir_all(DATA_DIR)
-        .context("Failed to create data directory")?;
+    std::fs::create_dir_all(DATA_DIR).context("Failed to create data directory")?;
 
     // Step 4: Write systemd unit
     println!("  Creating systemd unit at {}...", SYSTEMD_UNIT_PATH);
-    std::fs::write(SYSTEMD_UNIT_PATH, &unit_content)
-        .context("Failed to write systemd unit")?;
+    std::fs::write(SYSTEMD_UNIT_PATH, &unit_content).context("Failed to write systemd unit")?;
 
     // Step 5: Reload systemd and enable service
     println!("  Reloading systemd daemon...");
@@ -200,8 +199,8 @@ pub fn install(
             domain.clone(),
             port,
             Some(PathBuf::from("/etc/caddy/Caddyfile")),
-            true,   // install caddy
-            true,   // enable systemd
+            true, // install caddy
+            true, // enable systemd
             dns_provider.clone(),
         )?;
 
@@ -215,7 +214,10 @@ pub fn install(
             println!("\n  DNS-01 Setup Required:");
             println!("  Set the DNS API token environment variable for Caddy:");
             println!("  Edit /etc/systemd/system/caddy.service to add:");
-            println!("    Environment={}=your-api-token", caddy::dns_token_env_var(provider));
+            println!(
+                "    Environment={}=your-api-token",
+                caddy::dns_token_env_var(provider)
+            );
             println!("  Then: sudo systemctl daemon-reload && sudo systemctl restart caddy");
         }
     }
@@ -359,9 +361,9 @@ mod tests {
             "example.com".to_string(),
             8080,
             Some(PathBuf::from("/nonexistent/config.toml")),
-            true,   // dry_run
-            false,  // with_caddy
-            None,   // dns_provider
+            true,  // dry_run
+            false, // with_caddy
+            None,  // dns_provider
         );
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("not found"));

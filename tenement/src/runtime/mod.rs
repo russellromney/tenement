@@ -3,8 +3,8 @@
 //! Provides a trait-based abstraction that allows different runtime backends
 //! (bare processes, Linux namespaces, Firecracker VMs, QEMU, etc.) to be used interchangeably.
 
-mod process;
 mod namespace;
+mod process;
 
 #[cfg(feature = "firecracker")]
 mod firecracker;
@@ -15,8 +15,8 @@ mod qemu;
 #[cfg(feature = "sandbox")]
 mod sandbox;
 
-pub use process::ProcessRuntime;
 pub use namespace::NamespaceRuntime;
+pub use process::ProcessRuntime;
 
 #[cfg(feature = "firecracker")]
 pub use firecracker::FirecrackerRuntime;
@@ -83,15 +83,9 @@ impl std::str::FromStr for RuntimeType {
 #[derive(Debug)]
 pub enum RuntimeHandle {
     /// A bare process
-    Process {
-        child: Child,
-        socket: PathBuf,
-    },
+    Process { child: Child, socket: PathBuf },
     /// A namespaced process (Linux PID + Mount namespaces)
-    Namespace {
-        child: Child,
-        socket: PathBuf,
-    },
+    Namespace { child: Child, socket: PathBuf },
     /// A Firecracker microVM
     #[allow(dead_code)]
     Firecracker {
@@ -183,7 +177,9 @@ impl RuntimeHandle {
                 // Kill the entire process group (child + all descendants)
                 #[cfg(unix)]
                 if let Some(pid) = child.id() {
-                    unsafe { libc::kill(-(pid as i32), libc::SIGKILL); }
+                    unsafe {
+                        libc::kill(-(pid as i32), libc::SIGKILL);
+                    }
                 }
                 // Also kill via tokio handle and reap the zombie
                 let _ = child.kill().await;
@@ -205,7 +201,12 @@ impl RuntimeHandle {
                     // Try to send InstanceHalt action first (graceful shutdown)
                     if api_socket.exists() {
                         // Best effort graceful shutdown
-                        let _ = Self::fc_api_put(api_socket, "/actions", r#"{"action_type": "SendCtrlAltDel"}"#).await;
+                        let _ = Self::fc_api_put(
+                            api_socket,
+                            "/actions",
+                            r#"{"action_type": "SendCtrlAltDel"}"#,
+                        )
+                        .await;
                         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
                     }
 
@@ -488,15 +489,39 @@ mod tests {
 
     #[test]
     fn test_runtime_type_from_str() {
-        assert_eq!("process".parse::<RuntimeType>().unwrap(), RuntimeType::Process);
-        assert_eq!("namespace".parse::<RuntimeType>().unwrap(), RuntimeType::Namespace);
-        assert_eq!("sandbox".parse::<RuntimeType>().unwrap(), RuntimeType::Sandbox);
-        assert_eq!("gvisor".parse::<RuntimeType>().unwrap(), RuntimeType::Sandbox);
-        assert_eq!("firecracker".parse::<RuntimeType>().unwrap(), RuntimeType::Firecracker);
+        assert_eq!(
+            "process".parse::<RuntimeType>().unwrap(),
+            RuntimeType::Process
+        );
+        assert_eq!(
+            "namespace".parse::<RuntimeType>().unwrap(),
+            RuntimeType::Namespace
+        );
+        assert_eq!(
+            "sandbox".parse::<RuntimeType>().unwrap(),
+            RuntimeType::Sandbox
+        );
+        assert_eq!(
+            "gvisor".parse::<RuntimeType>().unwrap(),
+            RuntimeType::Sandbox
+        );
+        assert_eq!(
+            "firecracker".parse::<RuntimeType>().unwrap(),
+            RuntimeType::Firecracker
+        );
         assert_eq!("qemu".parse::<RuntimeType>().unwrap(), RuntimeType::Qemu);
-        assert_eq!("PROCESS".parse::<RuntimeType>().unwrap(), RuntimeType::Process);
-        assert_eq!("NAMESPACE".parse::<RuntimeType>().unwrap(), RuntimeType::Namespace);
-        assert_eq!("SANDBOX".parse::<RuntimeType>().unwrap(), RuntimeType::Sandbox);
+        assert_eq!(
+            "PROCESS".parse::<RuntimeType>().unwrap(),
+            RuntimeType::Process
+        );
+        assert_eq!(
+            "NAMESPACE".parse::<RuntimeType>().unwrap(),
+            RuntimeType::Namespace
+        );
+        assert_eq!(
+            "SANDBOX".parse::<RuntimeType>().unwrap(),
+            RuntimeType::Sandbox
+        );
         assert_eq!("QEMU".parse::<RuntimeType>().unwrap(), RuntimeType::Qemu);
         assert!("invalid".parse::<RuntimeType>().is_err());
     }

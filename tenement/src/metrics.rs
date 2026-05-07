@@ -75,7 +75,9 @@ pub struct Histogram {
 impl Histogram {
     /// Create a histogram with default latency buckets (in milliseconds)
     pub fn new() -> Self {
-        Self::with_buckets(vec![1.0, 5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0, 5000.0])
+        Self::with_buckets(vec![
+            1.0, 5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0, 5000.0,
+        ])
     }
 
     /// Create a histogram with custom bucket boundaries
@@ -118,7 +120,10 @@ impl Histogram {
     }
 
     pub fn get_bucket(&self, idx: usize) -> u64 {
-        self.bucket_counts.get(idx).map(|c| c.load(Ordering::Relaxed)).unwrap_or(0)
+        self.bucket_counts
+            .get(idx)
+            .map(|c| c.load(Ordering::Relaxed))
+            .unwrap_or(0)
     }
 
     pub fn buckets(&self) -> &[f64] {
@@ -169,10 +174,7 @@ impl LabeledCounter {
     /// Get all counters with their label keys
     pub async fn all(&self) -> Vec<(String, u64)> {
         let counters = self.counters.read().await;
-        counters
-            .iter()
-            .map(|(k, v)| (k.clone(), v.get()))
-            .collect()
+        counters.iter().map(|(k, v)| (k.clone(), v.get())).collect()
     }
 }
 
@@ -217,10 +219,7 @@ impl LabeledGauge {
     /// Get all gauges with their label keys
     pub async fn all(&self) -> Vec<(String, u64)> {
         let gauges = self.gauges.read().await;
-        gauges
-            .iter()
-            .map(|(k, v)| (k.clone(), v.get()))
-            .collect()
+        gauges.iter().map(|(k, v)| (k.clone(), v.get())).collect()
     }
 }
 
@@ -273,6 +272,7 @@ fn labels_to_key(labels: &Labels) -> String {
 }
 
 /// Parse a label key back to labels
+#[allow(dead_code)]
 fn key_to_labels(key: &str) -> Labels {
     if key.is_empty() {
         return HashMap::new();
@@ -330,7 +330,10 @@ impl Metrics {
             if labels.is_empty() {
                 output.push_str(&format!("tenement_requests_total {}\n", value));
             } else {
-                output.push_str(&format!("tenement_requests_total{{{}}} {}\n", labels, value));
+                output.push_str(&format!(
+                    "tenement_requests_total{{{}}} {}\n",
+                    labels, value
+                ));
             }
         }
 
@@ -373,7 +376,10 @@ impl Metrics {
         // tenement_instances_up
         output.push_str("\n# HELP tenement_instances_up Number of running instances\n");
         output.push_str("# TYPE tenement_instances_up gauge\n");
-        output.push_str(&format!("tenement_instances_up {}\n", self.instances_up.get()));
+        output.push_str(&format!(
+            "tenement_instances_up {}\n",
+            self.instances_up.get()
+        ));
 
         // tenement_instance_restarts_total
         output.push_str("\n# HELP tenement_instance_restarts_total Total instance restarts\n");
@@ -390,7 +396,8 @@ impl Metrics {
         }
 
         // tenement_instance_storage_bytes
-        output.push_str("\n# HELP tenement_instance_storage_bytes Current storage usage in bytes\n");
+        output
+            .push_str("\n# HELP tenement_instance_storage_bytes Current storage usage in bytes\n");
         output.push_str("# TYPE tenement_instance_storage_bytes gauge\n");
         for (labels, value) in self.instance_storage_bytes.all().await {
             if labels.is_empty() {
@@ -408,7 +415,10 @@ impl Metrics {
         output.push_str("# TYPE tenement_instance_storage_quota_bytes gauge\n");
         for (labels, value) in self.instance_storage_quota_bytes.all().await {
             if labels.is_empty() {
-                output.push_str(&format!("tenement_instance_storage_quota_bytes {}\n", value));
+                output.push_str(&format!(
+                    "tenement_instance_storage_quota_bytes {}\n",
+                    value
+                ));
             } else {
                 output.push_str(&format!(
                     "tenement_instance_storage_quota_bytes{{{}}} {}\n",
@@ -418,13 +428,18 @@ impl Metrics {
         }
 
         // tenement_instance_storage_usage_ratio
-        output.push_str("\n# HELP tenement_instance_storage_usage_ratio Storage usage ratio (0.0 to 1.0+)\n");
+        output.push_str(
+            "\n# HELP tenement_instance_storage_usage_ratio Storage usage ratio (0.0 to 1.0+)\n",
+        );
         output.push_str("# TYPE tenement_instance_storage_usage_ratio gauge\n");
         for (labels, value) in self.instance_storage_usage_ratio.all().await {
             // Value is stored as ratio * 10000, convert back to decimal
             let ratio = value as f64 / 10000.0;
             if labels.is_empty() {
-                output.push_str(&format!("tenement_instance_storage_usage_ratio {:.4}\n", ratio));
+                output.push_str(&format!(
+                    "tenement_instance_storage_usage_ratio {:.4}\n",
+                    ratio
+                ));
             } else {
                 output.push_str(&format!(
                     "tenement_instance_storage_usage_ratio{{{}}} {:.4}\n",
@@ -496,10 +511,10 @@ mod tests {
     #[test]
     fn test_histogram_observe() {
         let histogram = Histogram::with_buckets(vec![10.0, 50.0, 100.0]);
-        histogram.observe(5.0);   // -> bucket 0 (<=10)
-        histogram.observe(25.0);  // -> bucket 1 (<=50)
-        histogram.observe(75.0);  // -> bucket 2 (<=100)
-        histogram.observe(8.0);   // -> bucket 0 (<=10)
+        histogram.observe(5.0); // -> bucket 0 (<=10)
+        histogram.observe(25.0); // -> bucket 1 (<=50)
+        histogram.observe(75.0); // -> bucket 2 (<=100)
+        histogram.observe(8.0); // -> bucket 0 (<=10)
 
         assert_eq!(histogram.get_count(), 4);
         // Two values (5, 8) fall into bucket 0 (<=10)

@@ -16,7 +16,10 @@ fn test_fixture_path_exists() {
     assert!(mock_server.exists(), "mock_server.sh fixture should exist");
 
     let slow_startup = fixture_path("slow_startup.sh");
-    assert!(slow_startup.exists(), "slow_startup.sh fixture should exist");
+    assert!(
+        slow_startup.exists(),
+        "slow_startup.sh fixture should exist"
+    );
 
     let crash_on_health = fixture_path("crash_on_health.sh");
     assert!(

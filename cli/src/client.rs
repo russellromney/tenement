@@ -39,17 +39,22 @@ impl ApiClient {
     /// 1. Explicit token passed via --token flag
     /// 2. TENEMENT_TOKEN environment variable
     /// 3. Token file at {data_dir}/api_token  (data_dir_override takes precedence over config)
-    pub fn from_args(server_url: &str, explicit_token: Option<String>, data_dir_override: Option<&std::path::Path>) -> Result<Self> {
+    pub fn from_args(
+        server_url: &str,
+        explicit_token: Option<String>,
+        data_dir_override: Option<&std::path::Path>,
+    ) -> Result<Self> {
         let token = if let Some(t) = explicit_token {
             t
         } else if let Ok(t) = std::env::var("TENEMENT_TOKEN") {
             t
         } else {
             // Try to read from data_dir/api_token
-            let config = tenement::Config::load_with_override(
-                data_dir_override.map(|p| p.to_path_buf()),
-            )
-            .context("Could not load tenement.toml. Are you in a tenement project directory?")?;
+            let config =
+                tenement::Config::load_with_override(data_dir_override.map(|p| p.to_path_buf()))
+                    .context(
+                        "Could not load tenement.toml. Are you in a tenement project directory?",
+                    )?;
             let token_path = config.settings.data_dir.join(TOKEN_FILE);
             std::fs::read_to_string(&token_path).with_context(|| {
                 format!(
@@ -309,11 +314,7 @@ impl ApiClient {
         self.handle_response(resp).await
     }
 
-    async fn post<T: DeserializeOwned, B: Serialize>(
-        &self,
-        path: &str,
-        body: &B,
-    ) -> Result<T> {
+    async fn post<T: DeserializeOwned, B: Serialize>(&self, path: &str, body: &B) -> Result<T> {
         let url = format!("{}{}", self.server_url, path);
         let resp = self
             .client
@@ -327,10 +328,7 @@ impl ApiClient {
         self.handle_response(resp).await
     }
 
-    async fn handle_response<T: DeserializeOwned>(
-        &self,
-        resp: reqwest::Response,
-    ) -> Result<T> {
+    async fn handle_response<T: DeserializeOwned>(&self, resp: reqwest::Response) -> Result<T> {
         let status = resp.status();
         if status.is_success() {
             resp.json::<T>()

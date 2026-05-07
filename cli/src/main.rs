@@ -6,15 +6,20 @@ use tenement::{init_db, Config, ConfigStore, Hypervisor, TokenStore};
 use tenement_cli::client::{self, ApiClient};
 use tenement_cli::server;
 
-mod install;
 mod caddy;
+mod install;
 
 #[derive(Parser)]
 #[command(name = "tenement")]
 #[command(author, version, about = "Hyperlightweight process hypervisor")]
 struct Cli {
     /// Server URL for CLI commands (default: http://localhost:8080)
-    #[arg(long, default_value = "http://localhost:8080", global = true, env = "TENEMENT_SERVER")]
+    #[arg(
+        long,
+        default_value = "http://localhost:8080",
+        global = true,
+        env = "TENEMENT_SERVER"
+    )]
     server: String,
 
     /// API token (overrides TENEMENT_TOKEN env var and token file)
@@ -193,7 +198,13 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Serve { port, domain, tls, email, staging } => {
+        Commands::Serve {
+            port,
+            domain,
+            tls,
+            email,
+            staging,
+        } => {
             cmd_serve(port, domain, tls, email, staging, cli.data_dir).await?;
         }
         Commands::Spawn { instance } => {
@@ -259,7 +270,11 @@ async fn main() -> Result<()> {
             let resp = client.set_weight(&instance, weight).await?;
             println!("Set {} weight to {}", resp.instance, resp.weight);
         }
-        Commands::Deploy { instance, weight, timeout } => {
+        Commands::Deploy {
+            instance,
+            weight,
+            timeout,
+        } => {
             let (process, version) = parse_instance(&instance)?;
             let client = ApiClient::from_args(&cli.server, cli.token, cli.data_dir.as_deref())?;
             println!("Deploying {}:{} with weight {}", process, version, weight);
@@ -275,11 +290,20 @@ async fn main() -> Result<()> {
             let client = ApiClient::from_args(&cli.server, cli.token, cli.data_dir.as_deref())?;
             let resp = client.route(&process, &from, &to).await?;
 
-            println!("Routed traffic: {} -> {}", resp.from_instance, resp.to_instance);
+            println!(
+                "Routed traffic: {} -> {}",
+                resp.from_instance, resp.to_instance
+            );
             println!("  {} weight = {}", resp.from_instance, resp.from_weight);
             println!("  {} weight = {}", resp.to_instance, resp.to_weight);
         }
-        Commands::Logs { instance, level, search, limit, follow } => {
+        Commands::Logs {
+            instance,
+            level,
+            search,
+            limit,
+            follow,
+        } => {
             let client = ApiClient::from_args(&cli.server, cli.token, cli.data_dir.as_deref())?;
             let (process, id) = match &instance {
                 Some(inst) => {
@@ -297,7 +321,13 @@ async fn main() -> Result<()> {
             } else {
                 // One-shot query
                 let entries = client
-                    .query_logs(process.as_deref(), id.as_deref(), level.as_deref(), search.as_deref(), limit)
+                    .query_logs(
+                        process.as_deref(),
+                        id.as_deref(),
+                        level.as_deref(),
+                        search.as_deref(),
+                        limit,
+                    )
                     .await?;
 
                 for entry in entries {
@@ -327,7 +357,10 @@ async fn main() -> Result<()> {
         Commands::Config => {
             let config = Config::load_with_override(cli.data_dir)?;
             println!("Data dir: {:?}", config.settings.data_dir);
-            println!("Health interval: {}s", config.settings.health_check_interval);
+            println!(
+                "Health interval: {}s",
+                config.settings.health_check_interval
+            );
             println!("\nServices:");
             for (name, svc) in &config.service {
                 println!("  [{}]", name);
@@ -341,7 +374,10 @@ async fn main() -> Result<()> {
                 }
             }
         }
-        Commands::TokenGen { tenant, description } => {
+        Commands::TokenGen {
+            tenant,
+            description,
+        } => {
             let config = Config::load_with_override(cli.data_dir)?;
             let data_dir = config.settings.data_dir;
             let db_path = data_dir.join("tenement.db");
@@ -358,7 +394,10 @@ async fn main() -> Result<()> {
                 println!();
                 println!("  {}", token);
                 println!();
-                println!("This token can only access instances/logs for tenant '{}'.", tenant_id);
+                println!(
+                    "This token can only access instances/logs for tenant '{}'.",
+                    tenant_id
+                );
                 println!("Deploy and route operations are admin-only.");
             } else {
                 // Generate admin token
@@ -377,13 +416,27 @@ async fn main() -> Result<()> {
                 println!("Use it in the Authorization header: Bearer {}", token);
             }
         }
-        Commands::Install { domain, port, config, dry_run, caddy: with_caddy, dns_provider } => {
+        Commands::Install {
+            domain,
+            port,
+            config,
+            dry_run,
+            caddy: with_caddy,
+            dns_provider,
+        } => {
             install::install(domain, port, config, dry_run, with_caddy, dns_provider)?;
         }
         Commands::Uninstall => {
             install::uninstall()?;
         }
-        Commands::Caddy { domain, port, output, install: do_install, systemd, dns_provider } => {
+        Commands::Caddy {
+            domain,
+            port,
+            output,
+            install: do_install,
+            systemd,
+            dns_provider,
+        } => {
             caddy::run(domain, port, output, do_install, systemd, dns_provider)?;
         }
     }
@@ -411,10 +464,12 @@ async fn cmd_serve(
     let tls_options = if tls {
         let acme_email = email
             .or_else(|| config.settings.tls.acme_email.clone())
-            .ok_or_else(|| anyhow::anyhow!(
-                "TLS enabled but no email provided.\n\
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "TLS enabled but no email provided.\n\
                 Use --email <your@email.com> for Let's Encrypt registration."
-            ))?;
+                )
+            })?;
 
         validate_acme_email(&acme_email)?;
 
@@ -425,7 +480,10 @@ async fn cmd_serve(
             );
         }
 
-        let cache_dir = config.settings.tls.cache_dir
+        let cache_dir = config
+            .settings
+            .tls
+            .cache_dir
             .clone()
             .unwrap_or_else(|| config.settings.data_dir.join("acme"));
 
@@ -439,15 +497,20 @@ async fn cmd_serve(
             http_port: config.settings.tls.http_port,
         })
     } else if config.settings.tls.enabled {
-        let acme_email = config.settings.tls.acme_email.clone()
-            .ok_or_else(|| anyhow::anyhow!(
+        let acme_email = config.settings.tls.acme_email.clone().ok_or_else(|| {
+            anyhow::anyhow!(
                 "TLS enabled in config but acme_email not set.\n\
                 Add acme_email to [settings.tls] in tenement.toml"
-            ))?;
+            )
+        })?;
 
         validate_acme_email(&acme_email)?;
 
-        let tls_domain = config.settings.tls.domain.clone()
+        let tls_domain = config
+            .settings
+            .tls
+            .domain
+            .clone()
             .unwrap_or_else(|| domain.clone());
 
         if tls_domain == "localhost" {
@@ -457,7 +520,10 @@ async fn cmd_serve(
             );
         }
 
-        let cache_dir = config.settings.tls.cache_dir
+        let cache_dir = config
+            .settings
+            .tls
+            .cache_dir
             .clone()
             .unwrap_or_else(|| config.settings.data_dir.join("acme"));
 
@@ -486,7 +552,16 @@ async fn cmd_serve(
     }
 
     let hypervisor = Hypervisor::with_state_store(config, state_store);
-    server::serve(hypervisor, domain, port, config_store, deploy_log, tenant_tokens, tls_options).await?;
+    server::serve(
+        hypervisor,
+        domain,
+        port,
+        config_store,
+        deploy_log,
+        tenant_tokens,
+        tls_options,
+    )
+    .await?;
     Ok(())
 }
 
@@ -514,7 +589,7 @@ fn cmd_init(name: Option<String>, command: Option<String>) -> Result<()> {
         );
     }
 
-    let detected_command = command.unwrap_or_else(|| detect_framework_command());
+    let detected_command = command.unwrap_or_else(detect_framework_command);
 
     let config = format!(
         r#"[service.{name}]
@@ -638,8 +713,7 @@ fn init_tracing() {
                 .build();
             global::set_tracer_provider(provider.clone());
 
-            let telemetry = tracing_opentelemetry::layer()
-                .with_tracer(provider.tracer("tenement"));
+            let telemetry = tracing_opentelemetry::layer().with_tracer(provider.tracer("tenement"));
 
             tracing_subscriber::registry()
                 .with(tracing_subscriber::fmt::layer())

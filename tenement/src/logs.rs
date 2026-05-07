@@ -249,7 +249,7 @@ mod tests {
     #[test]
     fn test_log_level_clone() {
         let level = LogLevel::Stdout;
-        let cloned = level.clone();
+        let cloned = level;
         assert_eq!(level, cloned);
     }
 
@@ -347,18 +347,48 @@ mod tests {
     #[test]
     fn test_ring_buffer_push() {
         let mut buffer = RingBuffer::new(10);
-        buffer.push(LogEntry::new("api", "prod", LogLevel::Stdout, "msg1".to_string()));
-        buffer.push(LogEntry::new("api", "prod", LogLevel::Stdout, "msg2".to_string()));
+        buffer.push(LogEntry::new(
+            "api",
+            "prod",
+            LogLevel::Stdout,
+            "msg1".to_string(),
+        ));
+        buffer.push(LogEntry::new(
+            "api",
+            "prod",
+            LogLevel::Stdout,
+            "msg2".to_string(),
+        ));
         assert_eq!(buffer.len(), 2);
     }
 
     #[test]
     fn test_ring_buffer_eviction() {
         let mut buffer = RingBuffer::new(3);
-        buffer.push(LogEntry::new("api", "prod", LogLevel::Stdout, "msg1".to_string()));
-        buffer.push(LogEntry::new("api", "prod", LogLevel::Stdout, "msg2".to_string()));
-        buffer.push(LogEntry::new("api", "prod", LogLevel::Stdout, "msg3".to_string()));
-        buffer.push(LogEntry::new("api", "prod", LogLevel::Stdout, "msg4".to_string()));
+        buffer.push(LogEntry::new(
+            "api",
+            "prod",
+            LogLevel::Stdout,
+            "msg1".to_string(),
+        ));
+        buffer.push(LogEntry::new(
+            "api",
+            "prod",
+            LogLevel::Stdout,
+            "msg2".to_string(),
+        ));
+        buffer.push(LogEntry::new(
+            "api",
+            "prod",
+            LogLevel::Stdout,
+            "msg3".to_string(),
+        ));
+        buffer.push(LogEntry::new(
+            "api",
+            "prod",
+            LogLevel::Stdout,
+            "msg4".to_string(),
+        ));
 
         assert_eq!(buffer.len(), 3);
 
@@ -373,9 +403,24 @@ mod tests {
     #[test]
     fn test_ring_buffer_at_exact_capacity() {
         let mut buffer = RingBuffer::new(3);
-        buffer.push(LogEntry::new("api", "prod", LogLevel::Stdout, "msg1".to_string()));
-        buffer.push(LogEntry::new("api", "prod", LogLevel::Stdout, "msg2".to_string()));
-        buffer.push(LogEntry::new("api", "prod", LogLevel::Stdout, "msg3".to_string()));
+        buffer.push(LogEntry::new(
+            "api",
+            "prod",
+            LogLevel::Stdout,
+            "msg1".to_string(),
+        ));
+        buffer.push(LogEntry::new(
+            "api",
+            "prod",
+            LogLevel::Stdout,
+            "msg2".to_string(),
+        ));
+        buffer.push(LogEntry::new(
+            "api",
+            "prod",
+            LogLevel::Stdout,
+            "msg3".to_string(),
+        ));
 
         assert_eq!(buffer.len(), 3);
         assert_eq!(buffer.capacity, 3);
@@ -388,10 +433,20 @@ mod tests {
     #[test]
     fn test_ring_buffer_single_capacity() {
         let mut buffer = RingBuffer::new(1);
-        buffer.push(LogEntry::new("api", "prod", LogLevel::Stdout, "msg1".to_string()));
+        buffer.push(LogEntry::new(
+            "api",
+            "prod",
+            LogLevel::Stdout,
+            "msg1".to_string(),
+        ));
         assert_eq!(buffer.len(), 1);
 
-        buffer.push(LogEntry::new("api", "prod", LogLevel::Stdout, "msg2".to_string()));
+        buffer.push(LogEntry::new(
+            "api",
+            "prod",
+            LogLevel::Stdout,
+            "msg2".to_string(),
+        ));
         assert_eq!(buffer.len(), 1);
 
         let results = buffer.query(&LogQuery::default());
@@ -414,8 +469,18 @@ mod tests {
     #[test]
     fn test_ring_buffer_query_filter_process() {
         let mut buffer = RingBuffer::new(10);
-        buffer.push(LogEntry::new("api", "prod", LogLevel::Stdout, "api msg".to_string()));
-        buffer.push(LogEntry::new("web", "prod", LogLevel::Stdout, "web msg".to_string()));
+        buffer.push(LogEntry::new(
+            "api",
+            "prod",
+            LogLevel::Stdout,
+            "api msg".to_string(),
+        ));
+        buffer.push(LogEntry::new(
+            "web",
+            "prod",
+            LogLevel::Stdout,
+            "web msg".to_string(),
+        ));
 
         let query = LogQuery {
             process: Some("api".to_string()),
@@ -429,8 +494,18 @@ mod tests {
     #[test]
     fn test_ring_buffer_query_filter_instance() {
         let mut buffer = RingBuffer::new(10);
-        buffer.push(LogEntry::new("api", "prod", LogLevel::Stdout, "prod msg".to_string()));
-        buffer.push(LogEntry::new("api", "staging", LogLevel::Stdout, "staging msg".to_string()));
+        buffer.push(LogEntry::new(
+            "api",
+            "prod",
+            LogLevel::Stdout,
+            "prod msg".to_string(),
+        ));
+        buffer.push(LogEntry::new(
+            "api",
+            "staging",
+            LogLevel::Stdout,
+            "staging msg".to_string(),
+        ));
 
         let query = LogQuery {
             instance_id: Some("prod".to_string()),
@@ -444,8 +519,18 @@ mod tests {
     #[test]
     fn test_ring_buffer_query_filter_level() {
         let mut buffer = RingBuffer::new(10);
-        buffer.push(LogEntry::new("api", "prod", LogLevel::Stdout, "out".to_string()));
-        buffer.push(LogEntry::new("api", "prod", LogLevel::Stderr, "err".to_string()));
+        buffer.push(LogEntry::new(
+            "api",
+            "prod",
+            LogLevel::Stdout,
+            "out".to_string(),
+        ));
+        buffer.push(LogEntry::new(
+            "api",
+            "prod",
+            LogLevel::Stderr,
+            "err".to_string(),
+        ));
 
         let query = LogQuery {
             level: Some(LogLevel::Stderr),
@@ -459,10 +544,30 @@ mod tests {
     #[test]
     fn test_ring_buffer_query_combined_filters() {
         let mut buffer = RingBuffer::new(10);
-        buffer.push(LogEntry::new("api", "prod", LogLevel::Stdout, "api prod out".to_string()));
-        buffer.push(LogEntry::new("api", "prod", LogLevel::Stderr, "api prod err".to_string()));
-        buffer.push(LogEntry::new("api", "staging", LogLevel::Stderr, "api staging err".to_string()));
-        buffer.push(LogEntry::new("web", "prod", LogLevel::Stderr, "web prod err".to_string()));
+        buffer.push(LogEntry::new(
+            "api",
+            "prod",
+            LogLevel::Stdout,
+            "api prod out".to_string(),
+        ));
+        buffer.push(LogEntry::new(
+            "api",
+            "prod",
+            LogLevel::Stderr,
+            "api prod err".to_string(),
+        ));
+        buffer.push(LogEntry::new(
+            "api",
+            "staging",
+            LogLevel::Stderr,
+            "api staging err".to_string(),
+        ));
+        buffer.push(LogEntry::new(
+            "web",
+            "prod",
+            LogLevel::Stderr,
+            "web prod err".to_string(),
+        ));
 
         let query = LogQuery {
             process: Some("api".to_string()),
@@ -478,7 +583,12 @@ mod tests {
     #[test]
     fn test_ring_buffer_query_no_match() {
         let mut buffer = RingBuffer::new(10);
-        buffer.push(LogEntry::new("api", "prod", LogLevel::Stdout, "msg".to_string()));
+        buffer.push(LogEntry::new(
+            "api",
+            "prod",
+            LogLevel::Stdout,
+            "msg".to_string(),
+        ));
 
         let query = LogQuery {
             process: Some("nonexistent".to_string()),
@@ -518,8 +628,18 @@ mod tests {
     #[test]
     fn test_ring_buffer_query_limit_larger_than_buffer() {
         let mut buffer = RingBuffer::new(10);
-        buffer.push(LogEntry::new("api", "prod", LogLevel::Stdout, "msg1".to_string()));
-        buffer.push(LogEntry::new("api", "prod", LogLevel::Stdout, "msg2".to_string()));
+        buffer.push(LogEntry::new(
+            "api",
+            "prod",
+            LogLevel::Stdout,
+            "msg1".to_string(),
+        ));
+        buffer.push(LogEntry::new(
+            "api",
+            "prod",
+            LogLevel::Stdout,
+            "msg2".to_string(),
+        ));
 
         let query = LogQuery {
             limit: Some(100),
@@ -532,7 +652,12 @@ mod tests {
     #[test]
     fn test_ring_buffer_query_limit_zero() {
         let mut buffer = RingBuffer::new(10);
-        buffer.push(LogEntry::new("api", "prod", LogLevel::Stdout, "msg".to_string()));
+        buffer.push(LogEntry::new(
+            "api",
+            "prod",
+            LogLevel::Stdout,
+            "msg".to_string(),
+        ));
 
         let query = LogQuery {
             limit: Some(0),
@@ -549,9 +674,24 @@ mod tests {
     #[test]
     fn test_ring_buffer_query_search() {
         let mut buffer = RingBuffer::new(10);
-        buffer.push(LogEntry::new("api", "prod", LogLevel::Stdout, "hello world".to_string()));
-        buffer.push(LogEntry::new("api", "prod", LogLevel::Stdout, "goodbye".to_string()));
-        buffer.push(LogEntry::new("api", "prod", LogLevel::Stderr, "error: world".to_string()));
+        buffer.push(LogEntry::new(
+            "api",
+            "prod",
+            LogLevel::Stdout,
+            "hello world".to_string(),
+        ));
+        buffer.push(LogEntry::new(
+            "api",
+            "prod",
+            LogLevel::Stdout,
+            "goodbye".to_string(),
+        ));
+        buffer.push(LogEntry::new(
+            "api",
+            "prod",
+            LogLevel::Stderr,
+            "error: world".to_string(),
+        ));
 
         let query = LogQuery {
             search: Some("world".to_string()),
@@ -564,8 +704,18 @@ mod tests {
     #[test]
     fn test_ring_buffer_query_search_case_sensitive() {
         let mut buffer = RingBuffer::new(10);
-        buffer.push(LogEntry::new("api", "prod", LogLevel::Stdout, "Hello World".to_string()));
-        buffer.push(LogEntry::new("api", "prod", LogLevel::Stdout, "hello world".to_string()));
+        buffer.push(LogEntry::new(
+            "api",
+            "prod",
+            LogLevel::Stdout,
+            "Hello World".to_string(),
+        ));
+        buffer.push(LogEntry::new(
+            "api",
+            "prod",
+            LogLevel::Stdout,
+            "hello world".to_string(),
+        ));
 
         let query = LogQuery {
             search: Some("Hello".to_string()),
@@ -578,7 +728,12 @@ mod tests {
     #[test]
     fn test_ring_buffer_query_search_no_match() {
         let mut buffer = RingBuffer::new(10);
-        buffer.push(LogEntry::new("api", "prod", LogLevel::Stdout, "hello world".to_string()));
+        buffer.push(LogEntry::new(
+            "api",
+            "prod",
+            LogLevel::Stdout,
+            "hello world".to_string(),
+        ));
 
         let query = LogQuery {
             search: Some("xyz".to_string()),
@@ -591,8 +746,18 @@ mod tests {
     #[test]
     fn test_ring_buffer_query_search_empty_string() {
         let mut buffer = RingBuffer::new(10);
-        buffer.push(LogEntry::new("api", "prod", LogLevel::Stdout, "hello".to_string()));
-        buffer.push(LogEntry::new("api", "prod", LogLevel::Stdout, "world".to_string()));
+        buffer.push(LogEntry::new(
+            "api",
+            "prod",
+            LogLevel::Stdout,
+            "hello".to_string(),
+        ));
+        buffer.push(LogEntry::new(
+            "api",
+            "prod",
+            LogLevel::Stdout,
+            "world".to_string(),
+        ));
 
         let query = LogQuery {
             search: Some("".to_string()),
@@ -655,7 +820,9 @@ mod tests {
         let mut rx1 = buffer.subscribe();
         let mut rx2 = buffer.subscribe();
 
-        buffer.push_stdout("api", "prod", "broadcast".to_string()).await;
+        buffer
+            .push_stdout("api", "prod", "broadcast".to_string())
+            .await;
 
         let entry1 = rx1.recv().await.unwrap();
         let entry2 = rx2.recv().await.unwrap();
@@ -682,12 +849,16 @@ mod tests {
     #[tokio::test]
     async fn test_log_buffer_push_stdout() {
         let buffer = LogBuffer::new();
-        buffer.push_stdout("api", "prod", "stdout msg".to_string()).await;
+        buffer
+            .push_stdout("api", "prod", "stdout msg".to_string())
+            .await;
 
-        let results = buffer.query(&LogQuery {
-            level: Some(LogLevel::Stdout),
-            ..Default::default()
-        }).await;
+        let results = buffer
+            .query(&LogQuery {
+                level: Some(LogLevel::Stdout),
+                ..Default::default()
+            })
+            .await;
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].level, LogLevel::Stdout);
     }
@@ -695,12 +866,16 @@ mod tests {
     #[tokio::test]
     async fn test_log_buffer_push_stderr() {
         let buffer = LogBuffer::new();
-        buffer.push_stderr("api", "prod", "stderr msg".to_string()).await;
+        buffer
+            .push_stderr("api", "prod", "stderr msg".to_string())
+            .await;
 
-        let results = buffer.query(&LogQuery {
-            level: Some(LogLevel::Stderr),
-            ..Default::default()
-        }).await;
+        let results = buffer
+            .query(&LogQuery {
+                level: Some(LogLevel::Stderr),
+                ..Default::default()
+            })
+            .await;
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].level, LogLevel::Stderr);
     }

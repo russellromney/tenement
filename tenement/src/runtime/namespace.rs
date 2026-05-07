@@ -39,7 +39,6 @@ impl Default for NamespaceRuntime {
 mod linux_impl {
     use super::*;
     use anyhow::Context;
-    use std::os::unix::process::CommandExt;
     use std::process::Stdio;
     use tokio::process::Command;
 
@@ -74,12 +73,8 @@ mod linux_impl {
                 use nix::sched::{unshare, CloneFlags};
 
                 // Create new PID and Mount namespaces
-                unshare(CloneFlags::CLONE_NEWPID | CloneFlags::CLONE_NEWNS).map_err(|e| {
-                    std::io::Error::new(
-                        std::io::ErrorKind::Other,
-                        format!("unshare failed: {}", e),
-                    )
-                })?;
+                unshare(CloneFlags::CLONE_NEWPID | CloneFlags::CLONE_NEWNS)
+                    .map_err(|e| std::io::Error::other(format!("unshare failed: {}", e)))?;
 
                 // Make mount namespace private (don't propagate mounts)
                 mount(
@@ -89,12 +84,7 @@ mod linux_impl {
                     MsFlags::MS_REC | MsFlags::MS_PRIVATE,
                     None::<&str>,
                 )
-                .map_err(|e| {
-                    std::io::Error::new(
-                        std::io::ErrorKind::Other,
-                        format!("mount private failed: {}", e),
-                    )
-                })?;
+                .map_err(|e| std::io::Error::other(format!("mount private failed: {}", e)))?;
 
                 // Mount a new /proc for this namespace
                 // This gives the process its own view of /proc

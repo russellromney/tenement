@@ -42,17 +42,11 @@ pub fn create_router(state: SlumState) -> Router {
         .route("/health", get(health))
         // Server management
         .route("/api/servers", get(list_servers).post(add_server))
-        .route(
-            "/api/servers/:id",
-            get(get_server).delete(delete_server),
-        )
+        .route("/api/servers/:id", get(get_server).delete(delete_server))
         .route("/api/servers/:id/status", post(update_server_status))
         // Tenant management
         .route("/api/tenants", get(list_tenants).post(add_tenant))
-        .route(
-            "/api/tenants/:id",
-            get(get_tenant).delete(delete_tenant),
-        )
+        .route("/api/tenants/:id", get(get_tenant).delete(delete_tenant))
         // Aggregated metrics and logs
         .route("/api/metrics", get(aggregated_metrics))
         .route("/api/logs", get(aggregated_logs))
@@ -123,10 +117,7 @@ async fn add_server(
     }
 }
 
-async fn get_server(
-    State(state): State<SlumState>,
-    Path(id): Path<String>,
-) -> impl IntoResponse {
+async fn get_server(State(state): State<SlumState>, Path(id): Path<String>) -> impl IntoResponse {
     match state.db.get_server(&id).await {
         Ok(Some(server)) => Json(server).into_response(),
         Ok(None) => StatusCode::NOT_FOUND.into_response(),
@@ -202,10 +193,7 @@ async fn add_tenant(
     }
 }
 
-async fn get_tenant(
-    State(state): State<SlumState>,
-    Path(id): Path<String>,
-) -> impl IntoResponse {
+async fn get_tenant(State(state): State<SlumState>, Path(id): Path<String>) -> impl IntoResponse {
     match state.db.get_tenant(&id).await {
         Ok(Some(tenant)) => Json(tenant).into_response(),
         Ok(None) => StatusCode::NOT_FOUND.into_response(),
@@ -266,10 +254,7 @@ async fn fetch_server_metrics(
     let url = format!("{}/metrics", base_url);
     let uri: hyper::Uri = url.parse().ok()?;
 
-    let req = Request::builder()
-        .uri(uri)
-        .body(Body::empty())
-        .ok()?;
+    let req = Request::builder().uri(uri).body(Body::empty()).ok()?;
 
     match client.request(req).await {
         Ok(resp) => {
@@ -310,7 +295,10 @@ async fn proxy_request(
     let (tenant, server) = match state.db.route(domain).await {
         Ok(Some((t, s))) => (t, s),
         Ok(None) => {
-            return (StatusCode::NOT_FOUND, format!("No tenant for domain: {}", domain))
+            return (
+                StatusCode::NOT_FOUND,
+                format!("No tenant for domain: {}", domain),
+            )
                 .into_response();
         }
         Err(e) => {
@@ -320,11 +308,7 @@ async fn proxy_request(
 
     // Check server status
     if server.status == ServerStatus::Offline {
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            "Server is offline",
-        )
-            .into_response();
+        return (StatusCode::SERVICE_UNAVAILABLE, "Server is offline").into_response();
     }
 
     // Build target URL
@@ -333,7 +317,10 @@ async fn proxy_request(
         "{}.{}.{}",
         tenant.instance_id,
         tenant.process,
-        server.url.trim_start_matches("http://").trim_start_matches("https://")
+        server
+            .url
+            .trim_start_matches("http://")
+            .trim_start_matches("https://")
     );
 
     info!(

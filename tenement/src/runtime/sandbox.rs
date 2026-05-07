@@ -247,12 +247,19 @@ mod linux_impl {
         let runsc_bin = find_runsc(runsc_path)?;
 
         // Generate unique container ID
-        let container_id = format!("tenement-{}", &uuid::Uuid::new_v4().simple().to_string()[..8]);
+        let container_id = format!(
+            "tenement-{}",
+            &uuid::Uuid::new_v4().simple().to_string()[..8]
+        );
 
         // Create bundle directory
         let bundle_path = PathBuf::from(format!("/tmp/tenement-sandbox-{}", container_id));
-        std::fs::create_dir_all(&bundle_path)
-            .with_context(|| format!("Failed to create bundle directory: {}", bundle_path.display()))?;
+        std::fs::create_dir_all(&bundle_path).with_context(|| {
+            format!(
+                "Failed to create bundle directory: {}",
+                bundle_path.display()
+            )
+        })?;
 
         // Create rootfs with host symlinks
         let rootfs_path = bundle_path.join("rootfs");

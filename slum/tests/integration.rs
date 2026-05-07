@@ -9,12 +9,12 @@
 
 use axum::http::StatusCode;
 use axum_test::TestServer;
-use slum::{Server, SlumDb, Tenant};
+use chrono::Utc;
 use slum::db::ServerStatus;
 use slum::server::{create_router, SlumState};
+use slum::{Server, SlumDb, Tenant};
 use std::sync::Arc;
 use tempfile::TempDir;
-use chrono::Utc;
 
 /// Create a test database and state
 async fn create_test_state() -> (SlumState, Arc<SlumDb>, TempDir) {
@@ -300,7 +300,10 @@ async fn test_tenant_domain_unique() {
     let result = db
         .add_tenant(&test_tenant("tenant2", "app.example.com", "srv1"))
         .await;
-    assert!(result.is_err(), "Should fail due to unique domain constraint");
+    assert!(
+        result.is_err(),
+        "Should fail due to unique domain constraint"
+    );
 }
 
 // =============================================================================
@@ -440,9 +443,18 @@ async fn test_server_status_filtering() {
     assert_eq!(all.len(), 3);
 
     // Count by status
-    let online_count = all.iter().filter(|s| s.status == ServerStatus::Online).count();
-    let offline_count = all.iter().filter(|s| s.status == ServerStatus::Offline).count();
-    let degraded_count = all.iter().filter(|s| s.status == ServerStatus::Degraded).count();
+    let online_count = all
+        .iter()
+        .filter(|s| s.status == ServerStatus::Online)
+        .count();
+    let offline_count = all
+        .iter()
+        .filter(|s| s.status == ServerStatus::Offline)
+        .count();
+    let degraded_count = all
+        .iter()
+        .filter(|s| s.status == ServerStatus::Degraded)
+        .count();
 
     assert_eq!(online_count, 1);
     assert_eq!(offline_count, 1);
@@ -548,8 +560,14 @@ async fn test_server_full_lifecycle_api() {
     assert_eq!(servers[0]["status"], "online");
 
     // Delete
-    server.delete("/api/servers/srv1").await.assert_status(StatusCode::NO_CONTENT);
-    server.get("/api/servers/srv1").await.assert_status_not_found();
+    server
+        .delete("/api/servers/srv1")
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    server
+        .get("/api/servers/srv1")
+        .await
+        .assert_status_not_found();
 }
 
 /// Test full tenant CRUD lifecycle via API
@@ -591,8 +609,14 @@ async fn test_tenant_full_lifecycle_api() {
     assert_eq!(tenants.len(), 1);
 
     // Delete
-    server.delete("/api/tenants/tenant1").await.assert_status(StatusCode::NO_CONTENT);
-    server.get("/api/tenants/tenant1").await.assert_status_not_found();
+    server
+        .delete("/api/tenants/tenant1")
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    server
+        .get("/api/tenants/tenant1")
+        .await
+        .assert_status_not_found();
 }
 
 /// Test health endpoint always returns ok

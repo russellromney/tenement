@@ -113,9 +113,9 @@ impl FirecrackerRuntime {
     /// Send an HTTP PUT request to Firecracker's API socket
     #[cfg(target_os = "linux")]
     async fn api_put(socket_path: &PathBuf, endpoint: &str, body: &str) -> Result<()> {
-        let mut stream = UnixStream::connect(socket_path)
-            .await
-            .with_context(|| format!("Failed to connect to Firecracker API at {:?}", socket_path))?;
+        let mut stream = UnixStream::connect(socket_path).await.with_context(|| {
+            format!("Failed to connect to Firecracker API at {:?}", socket_path)
+        })?;
 
         let request = format!(
             "PUT {} HTTP/1.1\r\n\
@@ -136,10 +136,17 @@ impl FirecrackerRuntime {
 
         // Read response
         let mut response = vec![0u8; 4096];
-        let n = stream.read(&mut response).await.context("Failed to read response")?;
+        let n = stream
+            .read(&mut response)
+            .await
+            .context("Failed to read response")?;
         let response_str = String::from_utf8_lossy(&response[..n]);
 
-        debug!("Firecracker API {} response: {}", endpoint, response_str.lines().next().unwrap_or(""));
+        debug!(
+            "Firecracker API {} response: {}",
+            endpoint,
+            response_str.lines().next().unwrap_or("")
+        );
 
         // Check for success (2xx status)
         if response_str.contains("HTTP/1.1 2") {
@@ -195,7 +202,10 @@ impl FirecrackerRuntime {
         if issues.is_empty() {
             "Firecracker runtime available".to_string()
         } else {
-            format!("Firecracker runtime not available:\n  - {}", issues.join("\n  - "))
+            format!(
+                "Firecracker runtime not available:\n  - {}",
+                issues.join("\n  - ")
+            )
         }
     }
 }
@@ -241,7 +251,7 @@ impl Runtime for FirecrackerRuntime {
             let _firecracker_bin = self.find_firecracker().context(
                 "Firecracker binary not found.\n\
                 Install from: https://github.com/firecracker-microvm/firecracker/releases\n\
-                Place in /usr/local/bin/firecracker or add to PATH."
+                Place in /usr/local/bin/firecracker or add to PATH.",
             )?;
 
             if !vm_config.kernel.exists() {
@@ -262,7 +272,10 @@ impl Runtime for FirecrackerRuntime {
 
             // Allocate CID and create socket paths
             let cid = Self::allocate_cid();
-            let socket_dir = config.socket.parent().unwrap_or_else(|| std::path::Path::new("/tmp"));
+            let socket_dir = config
+                .socket
+                .parent()
+                .unwrap_or_else(|| std::path::Path::new("/tmp"));
             let instance_name = config
                 .socket
                 .file_stem()
@@ -339,8 +352,7 @@ impl Runtime for FirecrackerRuntime {
             // 5. Configure machine (vcpus and memory)
             let machine_config = format!(
                 r#"{{"vcpu_count": {}, "mem_size_mib": {}}}"#,
-                vm_config.vcpus,
-                vm_config.memory_mb
+                vm_config.vcpus, vm_config.memory_mb
             );
             if let Err(e) = Self::api_put(&api_socket, "/machine-config", &machine_config).await {
                 cleanup(child, &api_socket, &vsock_socket);
@@ -428,7 +440,10 @@ mod tests {
     #[test]
     fn test_with_binary() {
         let runtime = FirecrackerRuntime::with_binary(PathBuf::from("/custom/firecracker"));
-        assert_eq!(runtime.firecracker_bin, Some(PathBuf::from("/custom/firecracker")));
+        assert_eq!(
+            runtime.firecracker_bin,
+            Some(PathBuf::from("/custom/firecracker"))
+        );
     }
 
     // Integration tests require KVM and are marked as ignored
@@ -451,6 +466,9 @@ mod tests {
 
         let result = runtime.spawn(&config).await;
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("VmConfig is required"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("VmConfig is required"));
     }
 }

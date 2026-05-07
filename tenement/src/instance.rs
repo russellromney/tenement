@@ -352,7 +352,7 @@ mod tests {
     #[test]
     fn test_health_status_clone() {
         let status = HealthStatus::Degraded;
-        let cloned = status.clone();
+        let cloned = status;
         assert_eq!(status, cloned);
     }
 
@@ -418,7 +418,7 @@ mod tests {
     #[test]
     fn test_instance_status_clone() {
         let status = InstanceStatus::Starting;
-        let cloned = status.clone();
+        let cloned = status;
         assert_eq!(status, cloned);
     }
 
@@ -601,10 +601,7 @@ mod tests {
     fn test_is_idle_logic_zero_timeout() {
         // If idle_timeout is Some(0), is_idle should return false
         let timeout: Option<u64> = Some(0);
-        let is_idle = match timeout {
-            Some(t) if t > 0 => true,
-            _ => false,
-        };
+        let is_idle = matches!(timeout, Some(t) if t > 0);
         assert!(!is_idle);
     }
 
@@ -646,7 +643,7 @@ mod tests {
 
         // Minutes
         assert_eq!(format_uptime(60), "1m");
-        assert_eq!(format_uptime(90), "1m");  // 1.5 minutes = 1m
+        assert_eq!(format_uptime(90), "1m"); // 1.5 minutes = 1m
         assert_eq!(format_uptime(120), "2m");
         assert_eq!(format_uptime(3599), "59m");
 
@@ -811,7 +808,7 @@ mod tests {
             idle_secs: 0,
             idle_timeout: None,
             storage_used_bytes: 1024 * 1024 * 100, // 100MB
-            storage_quota_bytes: None, // No quota
+            storage_quota_bytes: None,             // No quota
             data_dir: PathBuf::from("/data/api/user1"),
             weight: 100,
         };
@@ -833,7 +830,7 @@ mod tests {
             status: InstanceStatus::Running,
             idle_secs: 0,
             idle_timeout: None,
-            storage_used_bytes: 134217728, // 128MB
+            storage_used_bytes: 134217728,        // 128MB
             storage_quota_bytes: Some(536870912), // 512MB
             data_dir: PathBuf::from("/data/api/user1"),
             weight: 100,

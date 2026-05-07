@@ -6,10 +6,12 @@ use crate::instance::{HealthStatus, Instance, InstanceId, InstanceInfo};
 use crate::logs::LogBuffer;
 use crate::metrics::Metrics;
 use crate::port_allocator::PortAllocator;
-use crate::runtime::{NamespaceRuntime, ProcessRuntime, Runtime, RuntimeHandle, RuntimeType, SpawnConfig};
-use crate::storage::{calculate_dir_size, StorageInfo};
 #[cfg(feature = "sandbox")]
 use crate::runtime::SandboxRuntime;
+use crate::runtime::{
+    NamespaceRuntime, ProcessRuntime, Runtime, RuntimeHandle, RuntimeType, SpawnConfig,
+};
+use crate::storage::{calculate_dir_size, StorageInfo};
 use anyhow::{Context, Result};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -28,7 +30,8 @@ pub struct ConnectionGuard {
 
 impl Drop for ConnectionGuard {
     fn drop(&mut self) {
-        self.counter.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+        self.counter
+            .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
     }
 }
 
@@ -116,10 +119,15 @@ impl Hypervisor {
     }
 
     /// Create a new hypervisor with a state store for crash recovery
-    pub fn with_state_store(config: Config, state_store: Arc<crate::store::StateStore>) -> Arc<Self> {
+    pub fn with_state_store(
+        config: Config,
+        state_store: Arc<crate::store::StateStore>,
+    ) -> Arc<Self> {
         let mut hyp = Self::new(config);
         // SAFETY: Arc::get_mut works because we just created this Arc and hold the only reference
-        Arc::get_mut(&mut hyp).expect("just created Arc").state_store = Some(state_store);
+        Arc::get_mut(&mut hyp)
+            .expect("just created Arc")
+            .state_store = Some(state_store);
         hyp
     }
 
@@ -226,20 +234,26 @@ impl Hypervisor {
             RuntimeType::Firecracker | RuntimeType::Qemu => {
                 anyhow::bail!(
                     "Instance {}: {} isolation not yet supported in hypervisor",
-                    instance_id, isolation
+                    instance_id,
+                    isolation
                 );
             }
         }
 
-        info!("Spawning instance {} (isolation: {})", instance_id, isolation);
+        info!(
+            "Spawning instance {} (isolation: {})",
+            instance_id, isolation
+        );
 
         // Allocate a TCP port for process/namespace/sandbox runtimes
         // VMs (Firecracker/QEMU) use vsock, so they don't need TCP ports
         let port = match isolation {
-            RuntimeType::Process | RuntimeType::Namespace | RuntimeType::Sandbox => {
-                Some(self.port_allocator.allocate().await
-                    .with_context(|| format!("Failed to allocate port for {}", instance_id))?)
-            }
+            RuntimeType::Process | RuntimeType::Namespace | RuntimeType::Sandbox => Some(
+                self.port_allocator
+                    .allocate()
+                    .await
+                    .with_context(|| format!("Failed to allocate port for {}", instance_id))?,
+            ),
             RuntimeType::Firecracker | RuntimeType::Qemu => None,
         };
 
@@ -251,7 +265,8 @@ impl Hypervisor {
         let (command, args) = if explicit_args.is_empty() {
             let parts = shell_words::split(&raw_command)
                 .with_context(|| format!("Failed to parse command: {}", raw_command))?;
-            let (cmd, rest) = parts.split_first()
+            let (cmd, rest) = parts
+                .split_first()
                 .map(|t| (t.0.clone(), t.1.to_vec()))
                 .unwrap_or((raw_command, vec![]));
             (cmd, rest)
@@ -264,7 +279,10 @@ impl Hypervisor {
         env.extend(extra_env);
 
         // Always set SOCKET_PATH for backwards compatibility and test scripts
-        env.insert("SOCKET_PATH".to_string(), socket.to_string_lossy().to_string());
+        env.insert(
+            "SOCKET_PATH".to_string(),
+            socket.to_string_lossy().to_string(),
+        );
 
         // Also set PORT for TCP-based runtimes (Process/Namespace/Sandbox)
         if let Some(port) = port {
@@ -301,17 +319,26 @@ impl Hypervisor {
         if resource_limits.has_limits() {
             // Create cgroup and add process. Fail loudly if resource limits are
             // configured but can't be applied (process would run unrestricted).
-            if let Err(e) = self.cgroup_manager.create_cgroup(&instance_id.to_string(), &resource_limits) {
+            if let Err(e) = self
+                .cgroup_manager
+                .create_cgroup(&instance_id.to_string(), &resource_limits)
+            {
                 // Kill the already-spawned child and clean up spawning guard
                 let _ = handle.kill().await;
                 self.spawning.write().await.remove(&instance_id);
-                return Err(e).with_context(|| format!(
-                    "Failed to create cgroup for {}. Resource limits will not be enforced.", instance_id
-                ));
+                return Err(e).with_context(|| {
+                    format!(
+                        "Failed to create cgroup for {}. Resource limits will not be enforced.",
+                        instance_id
+                    )
+                });
             }
 
             if let Some(pid) = handle.pid() {
-                if let Err(e) = self.cgroup_manager.add_process(&instance_id.to_string(), pid, &resource_limits) {
+                if let Err(e) =
+                    self.cgroup_manager
+                        .add_process(&instance_id.to_string(), pid, &resource_limits)
+                {
                     let _ = handle.kill().await;
                     self.spawning.write().await.remove(&instance_id);
                     return Err(e).with_context(|| format!(
@@ -368,7 +395,10 @@ impl Hypervisor {
         // Restore restart history from persistent storage (survives stop/spawn cycles)
         let (restarts, restart_times) = {
             let history = self.restart_history.read().await;
-            history.get(&instance_id).cloned().unwrap_or((0, Vec::new()))
+            history
+                .get(&instance_id)
+                .cloned()
+                .unwrap_or((0, Vec::new()))
         };
 
         let instance = Instance {
@@ -422,7 +452,10 @@ impl Hypervisor {
                     started_at: chrono::Utc::now().to_rfc3339(),
                 };
                 if let Err(e) = store.save(&state).await {
-                    error!("Failed to persist instance state for {}: {}", instance_id, e);
+                    error!(
+                        "Failed to persist instance state for {}: {}",
+                        instance_id, e
+                    );
                 }
             }
         }
@@ -462,11 +495,13 @@ impl Hypervisor {
                                 "Instance {} (pid {}) exited unexpectedly",
                                 exit_instance_id, pid
                             );
-                            log_buffer.push_stderr(
-                                &exit_instance_id.process,
-                                &exit_instance_id.id,
-                                format!("Process exited unexpectedly (pid {})", pid),
-                            ).await;
+                            log_buffer
+                                .push_stderr(
+                                    &exit_instance_id.process,
+                                    &exit_instance_id.id,
+                                    format!("Process exited unexpectedly (pid {})", pid),
+                                )
+                                .await;
                         }
                         break;
                     }
@@ -485,7 +520,10 @@ impl Hypervisor {
                 }
                 tokio::time::sleep(Duration::from_millis(10)).await;
             }
-            warn!("Instance {} TCP port {} not ready after 500ms", instance_id, port);
+            warn!(
+                "Instance {} TCP port {} not ready after 500ms",
+                instance_id, port
+            );
         } else {
             // Socket mode: check if file exists (VMs use vsock)
             for _ in 0..50 {
@@ -587,7 +625,10 @@ impl Hypervisor {
                         instance.data_dir, instance_id, e
                     );
                 } else {
-                    info!("Removed data directory {:?} for {}", instance.data_dir, instance_id);
+                    info!(
+                        "Removed data directory {:?} for {}",
+                        instance.data_dir, instance_id
+                    );
                 }
             }
 
@@ -614,7 +655,10 @@ impl Hypervisor {
         // Get restart count from persistent history (survives stop/spawn cycles)
         let restarts = {
             let history = self.restart_history.read().await;
-            history.get(&instance_id).map(|(count, _)| *count).unwrap_or(0)
+            history
+                .get(&instance_id)
+                .map(|(count, _)| *count)
+                .unwrap_or(0)
         };
 
         // Stop if running
@@ -625,7 +669,9 @@ impl Hypervisor {
         if backoff_delay > Duration::ZERO {
             info!(
                 "Applying backoff delay of {:?} before restarting {} (restart #{})",
-                backoff_delay, instance_id, restarts + 1
+                backoff_delay,
+                instance_id,
+                restarts + 1
             );
             tokio::time::sleep(backoff_delay).await;
         }
@@ -637,7 +683,9 @@ impl Hypervisor {
         let window = Duration::from_secs(self.config.settings.restart_window);
         {
             let mut history = self.restart_history.write().await;
-            let entry = history.entry(instance_id.clone()).or_insert((0, Vec::new()));
+            let entry = history
+                .entry(instance_id.clone())
+                .or_insert((0, Vec::new()));
             entry.0 = restarts + 1;
             entry.1.push(Instant::now());
             entry.1.retain(|t| t.elapsed() < window);
@@ -723,9 +771,9 @@ impl Hypervisor {
         let instance_id = InstanceId::new(process_name, id);
         let (data_dir, quota_mb) = {
             let instances = self.instances.read().await;
-            instances.get(&instance_id).map(|i| {
-                (i.data_dir.clone(), i.storage_quota_mb)
-            })?
+            instances
+                .get(&instance_id)
+                .map(|i| (i.data_dir.clone(), i.storage_quota_mb))?
         };
 
         // Calculate current directory size
@@ -831,7 +879,8 @@ impl Hypervisor {
         let result = if let Some(port) = tcp_port {
             self.ping_health_tcp(port, health_endpoint).await
         } else {
-            self.ping_health_with_vsock(&socket, health_endpoint, vsock_port).await
+            self.ping_health_with_vsock(&socket, health_endpoint, vsock_port)
+                .await
         };
 
         let mut instances = self.instances.write().await;
@@ -995,7 +1044,9 @@ impl Hypervisor {
         };
 
         for instance_id in instance_ids {
-            let status = self.check_health(&instance_id.process, &instance_id.id).await;
+            let status = self
+                .check_health(&instance_id.process, &instance_id.id)
+                .await;
 
             match status {
                 HealthStatus::Unhealthy => {
@@ -1178,19 +1229,31 @@ impl Hypervisor {
             let mut labels = HashMap::new();
             labels.insert("process".to_string(), instance_id.process.clone());
             labels.insert("id".to_string(), instance_id.id.clone());
-            let gauge = self.metrics.instance_storage_bytes.with_labels(&labels).await;
+            let gauge = self
+                .metrics
+                .instance_storage_bytes
+                .with_labels(&labels)
+                .await;
             gauge.set(used_bytes);
 
             // Check quota
             if let Some(quota_mb) = quota_mb {
                 let quota_bytes = (quota_mb as u64) * 1024 * 1024;
 
-                let quota_gauge = self.metrics.instance_storage_quota_bytes.with_labels(&labels).await;
+                let quota_gauge = self
+                    .metrics
+                    .instance_storage_quota_bytes
+                    .with_labels(&labels)
+                    .await;
                 quota_gauge.set(quota_bytes);
 
                 if quota_bytes > 0 {
                     let ratio = used_bytes as f64 / quota_bytes as f64;
-                    let ratio_gauge = self.metrics.instance_storage_usage_ratio.with_labels(&labels).await;
+                    let ratio_gauge = self
+                        .metrics
+                        .instance_storage_usage_ratio
+                        .with_labels(&labels)
+                        .await;
                     ratio_gauge.set((ratio * 10000.0) as u64);
 
                     if ratio >= 1.0 {
@@ -1236,7 +1299,10 @@ impl Hypervisor {
             return;
         }
 
-        info!("Found {} orphaned instance(s) from previous run", states.len());
+        info!(
+            "Found {} orphaned instance(s) from previous run",
+            states.len()
+        );
 
         for state in &states {
             // Check if process is still alive
@@ -1284,7 +1350,10 @@ impl Hypervisor {
             return (0, 0);
         }
 
-        info!("Auto-spawning {} configured instance(s)", instances_to_spawn.len());
+        info!(
+            "Auto-spawning {} configured instance(s)",
+            instances_to_spawn.len()
+        );
 
         let mut success_count = 0;
         let mut fail_count = 0;
@@ -1301,10 +1370,7 @@ impl Hypervisor {
                     success_count += 1;
                 }
                 Err(e) => {
-                    error!(
-                        "Failed to spawn {}:{}: {}",
-                        service_name, instance_id, e
-                    );
+                    error!("Failed to spawn {}:{}: {}", service_name, instance_id, e);
                     fail_count += 1;
                 }
             }
@@ -1343,7 +1409,9 @@ impl Hypervisor {
             // Check if instance became available while we were setting up
             if self.is_running(process_name, id).await {
                 self.touch_activity(process_name, id).await;
-                let info = self.get(process_name, id).await
+                let info = self
+                    .get(process_name, id)
+                    .await
                     .ok_or_else(|| anyhow::anyhow!("Instance {} disappeared", instance_id))?;
                 return Ok(info.socket);
             }
@@ -1373,10 +1441,7 @@ impl Hypervisor {
         let socket = self.spawn_if_not_running(process_name, id).await?;
 
         // Get port info to determine readiness check method
-        let port = self
-            .get(process_name, id)
-            .await
-            .and_then(|info| info.port);
+        let port = self.get(process_name, id).await.and_then(|info| info.port);
 
         // Wait for service to be ready (check every 100ms)
         // Try TCP first if port is available, fall back to socket existence
@@ -1416,8 +1481,11 @@ impl Hypervisor {
         if ready {
             Ok(socket)
         } else {
-            anyhow::bail!("Instance {} failed to start within {} seconds",
-                instance_id, timeout_secs)
+            anyhow::bail!(
+                "Instance {} failed to start within {} seconds",
+                instance_id,
+                timeout_secs
+            )
         }
     }
 
@@ -1441,7 +1509,8 @@ impl Hypervisor {
         let socket = self.spawn(process_name, version).await?;
 
         // Set initial weight
-        self.set_weight(process_name, version, initial_weight).await?;
+        self.set_weight(process_name, version, initial_weight)
+            .await?;
 
         // Wait for health check to pass
         let check_interval = Duration::from_millis(500);
@@ -1558,6 +1627,7 @@ mod tests {
     }
 
     // Helper to create a shell script that creates a socket and waits
+    #[allow(dead_code)]
     fn create_socket_server_script(dir: &Path) -> PathBuf {
         let script_path = dir.join("server.sh");
         let script = r#"#!/bin/bash
@@ -1641,16 +1711,28 @@ sleep 30
         assert_eq!(hypervisor.calculate_backoff(4), Duration::from_millis(8000));
 
         // 5 restarts = 16000ms (16s)
-        assert_eq!(hypervisor.calculate_backoff(5), Duration::from_millis(16000));
+        assert_eq!(
+            hypervisor.calculate_backoff(5),
+            Duration::from_millis(16000)
+        );
 
         // 6 restarts = 32000ms (32s)
-        assert_eq!(hypervisor.calculate_backoff(6), Duration::from_millis(32000));
+        assert_eq!(
+            hypervisor.calculate_backoff(6),
+            Duration::from_millis(32000)
+        );
 
         // 7 restarts = 64000ms but capped at 60000ms (60s max)
-        assert_eq!(hypervisor.calculate_backoff(7), Duration::from_millis(60000));
+        assert_eq!(
+            hypervisor.calculate_backoff(7),
+            Duration::from_millis(60000)
+        );
 
         // Large values stay capped
-        assert_eq!(hypervisor.calculate_backoff(100), Duration::from_millis(60000));
+        assert_eq!(
+            hypervisor.calculate_backoff(100),
+            Duration::from_millis(60000)
+        );
     }
 
     #[test]
@@ -1767,7 +1849,11 @@ sleep 30
         let hypervisor = Hypervisor::new(config);
 
         let result = hypervisor.spawn("api", "test").await;
-        assert!(result.is_ok(), "Shell-split command should spawn: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "Shell-split command should spawn: {:?}",
+            result.err()
+        );
 
         hypervisor.stop("api", "test").await.ok();
     }
@@ -1779,7 +1865,11 @@ sleep 30
         let hypervisor = Hypervisor::new(config);
 
         let result = hypervisor.spawn("api", "test").await;
-        assert!(result.is_ok(), "Explicit args should spawn: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "Explicit args should spawn: {:?}",
+            result.err()
+        );
 
         hypervisor.stop("api", "test").await.ok();
     }
@@ -1793,7 +1883,11 @@ sleep 30
         // Should interpolate to "echo --id user123 --name api" then split into
         // command="echo", args=["--id", "user123", "--name", "api"]
         let result = hypervisor.spawn("api", "user123").await;
-        assert!(result.is_ok(), "Interpolated+split command should spawn: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "Interpolated+split command should spawn: {:?}",
+            result.err()
+        );
 
         hypervisor.stop("api", "user123").await.ok();
     }
@@ -1880,10 +1974,16 @@ sleep 30
         let hypervisor = Hypervisor::new(config);
 
         // First call spawns
-        let socket1 = hypervisor.spawn_if_not_running("api", "test").await.unwrap();
+        let socket1 = hypervisor
+            .spawn_if_not_running("api", "test")
+            .await
+            .unwrap();
 
         // Second call returns existing socket without spawning again
-        let socket2 = hypervisor.spawn_if_not_running("api", "test").await.unwrap();
+        let socket2 = hypervisor
+            .spawn_if_not_running("api", "test")
+            .await
+            .unwrap();
         assert_eq!(socket1, socket2);
 
         // Only one instance in list
@@ -2111,10 +2211,13 @@ sleep 30
         tokio::time::sleep(Duration::from_millis(100)).await;
 
         // Check log buffer
-        let logs = hypervisor.log_buffer().query(&crate::logs::LogQuery {
-            process: Some("api".to_string()),
-            ..Default::default()
-        }).await;
+        let logs = hypervisor
+            .log_buffer()
+            .query(&crate::logs::LogQuery {
+                process: Some("api".to_string()),
+                ..Default::default()
+            })
+            .await;
 
         // Should have captured stdout
         assert!(logs.iter().any(|l| l.message.contains("hello from stdout")));
@@ -2131,11 +2234,14 @@ sleep 30
         tokio::time::sleep(Duration::from_millis(100)).await;
 
         // Check log buffer
-        let logs = hypervisor.log_buffer().query(&crate::logs::LogQuery {
-            process: Some("api".to_string()),
-            level: Some(crate::logs::LogLevel::Stderr),
-            ..Default::default()
-        }).await;
+        let logs = hypervisor
+            .log_buffer()
+            .query(&crate::logs::LogQuery {
+                process: Some("api".to_string()),
+                level: Some(crate::logs::LogLevel::Stderr),
+                ..Default::default()
+            })
+            .await;
 
         assert!(logs.iter().any(|l| l.message.contains("error")));
     }
@@ -2188,7 +2294,10 @@ sleep 30
         // File exists but isn't a real socket, so can't connect
         // The actual status depends on implementation - could be Healthy (file exists)
         // or Unhealthy (can't connect). Just verify it returns a status.
-        assert!(matches!(status, HealthStatus::Healthy | HealthStatus::Unhealthy));
+        assert!(matches!(
+            status,
+            HealthStatus::Healthy | HealthStatus::Unhealthy
+        ));
 
         hypervisor.stop("api", "test").await.ok();
     }
@@ -2214,7 +2323,10 @@ sleep 30
         // Don't spawn, just check health
         // For a configured process that isn't running, returns Unhealthy
         let status = hypervisor.check_health("api", "test").await;
-        assert!(matches!(status, HealthStatus::Unknown | HealthStatus::Unhealthy));
+        assert!(matches!(
+            status,
+            HealthStatus::Unknown | HealthStatus::Unhealthy
+        ));
     }
 
     // ===================
@@ -2251,14 +2363,22 @@ sleep 30
         let mut extra_env = HashMap::new();
         extra_env.insert("MY_CUSTOM_VAR".to_string(), "custom_value".to_string());
 
-        hypervisor.spawn_with_env("api", "test", extra_env).await.unwrap();
+        hypervisor
+            .spawn_with_env("api", "test", extra_env)
+            .await
+            .unwrap();
 
         // Give time for process to run
         tokio::time::sleep(Duration::from_millis(100)).await;
 
         // Check that env was set (captured in logs)
-        let logs = hypervisor.log_buffer().query(&crate::logs::LogQuery::default()).await;
-        assert!(logs.iter().any(|l| l.message.contains("MY_CUSTOM_VAR=custom_value")));
+        let logs = hypervisor
+            .log_buffer()
+            .query(&crate::logs::LogQuery::default())
+            .await;
+        assert!(logs
+            .iter()
+            .any(|l| l.message.contains("MY_CUSTOM_VAR=custom_value")));
     }
 
     #[tokio::test]
@@ -2271,7 +2391,10 @@ sleep 30
         tokio::time::sleep(Duration::from_millis(100)).await;
 
         // Process runtime should get a PORT env var with auto-allocated port (30000-40000)
-        let logs = hypervisor.log_buffer().query(&crate::logs::LogQuery::default()).await;
+        let logs = hypervisor
+            .log_buffer()
+            .query(&crate::logs::LogQuery::default())
+            .await;
         assert!(logs.iter().any(|l| l.message.contains("PORT=3")));
     }
 
@@ -2297,7 +2420,9 @@ sleep 30
         let script = create_touch_socket_script(dir.path());
 
         let mut config = test_config_with_process("api", script.to_str().unwrap(), vec![]);
-        config.instances.insert("api".to_string(), vec!["prod".to_string()]);
+        config
+            .instances
+            .insert("api".to_string(), vec!["prod".to_string()]);
         let hypervisor = Hypervisor::new(config);
 
         let (success, failed) = hypervisor.spawn_configured_instances().await;
@@ -2352,7 +2477,7 @@ sleep 30
                 restart: "on-failure".to_string(),
                 idle_timeout: None,
                 startup_timeout: 5,
-            request_timeout: 30,
+                request_timeout: 30,
                 memory_limit_mb: None,
                 cpu_shares: None,
                 kernel: None,
@@ -2366,8 +2491,12 @@ sleep 30
         );
 
         // Configure both to spawn
-        config.instances.insert("api".to_string(), vec!["prod".to_string()]);
-        config.instances.insert("broken".to_string(), vec!["test".to_string()]);
+        config
+            .instances
+            .insert("api".to_string(), vec!["prod".to_string()]);
+        config
+            .instances
+            .insert("broken".to_string(), vec!["test".to_string()]);
 
         let hypervisor = Hypervisor::new(config);
 
@@ -2582,8 +2711,10 @@ sleep 30
         // v1 should get roughly 90% of selections (with some variance)
         // Allow 15% margin for statistical variance
         let v1_ratio = v1_count as f64 / iterations as f64;
+        let v2_ratio = v2_count as f64 / iterations as f64;
         assert!(v1_ratio > 0.75, "v1 ratio {} should be > 0.75", v1_ratio);
         assert!(v1_ratio < 0.98, "v1 ratio {} should be < 0.98", v1_ratio);
+        assert!(v2_ratio > 0.02, "v2 ratio {} should be > 0.02", v2_ratio);
 
         hypervisor.stop("api", "v1").await.ok();
         hypervisor.stop("api", "v2").await.ok();
@@ -2603,7 +2734,9 @@ sleep 30
         let hypervisor = Hypervisor::new(config);
 
         // Deploy v2 with default weight
-        let result = hypervisor.deploy_and_wait_healthy("api", "v2", 100, 5).await;
+        let result = hypervisor
+            .deploy_and_wait_healthy("api", "v2", 100, 5)
+            .await;
         assert!(result.is_ok(), "Deploy should succeed: {:?}", result.err());
 
         // Verify instance is running with correct weight
@@ -2638,7 +2771,9 @@ sleep 30
         let config = Config::default();
         let hypervisor = Hypervisor::new(config);
 
-        let result = hypervisor.deploy_and_wait_healthy("nonexistent", "v1", 100, 5).await;
+        let result = hypervisor
+            .deploy_and_wait_healthy("nonexistent", "v1", 100, 5)
+            .await;
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("Unknown process"));
     }
@@ -2753,10 +2888,16 @@ sleep 30
         let hypervisor = Hypervisor::new(config);
 
         // 1. Deploy v1 (blue) initially
-        hypervisor.deploy_and_wait_healthy("api", "v1", 100, 5).await.unwrap();
+        hypervisor
+            .deploy_and_wait_healthy("api", "v1", 100, 5)
+            .await
+            .unwrap();
 
         // 2. Deploy v2 (green) with weight 0 (no traffic yet)
-        hypervisor.deploy_and_wait_healthy("api", "v2", 0, 5).await.unwrap();
+        hypervisor
+            .deploy_and_wait_healthy("api", "v2", 0, 5)
+            .await
+            .unwrap();
 
         // At this point, all traffic goes to v1
         for _ in 0..5 {
@@ -2794,10 +2935,16 @@ sleep 30
         let hypervisor = Hypervisor::new(config);
 
         // 1. v1 is running with full traffic
-        hypervisor.deploy_and_wait_healthy("api", "v1", 100, 5).await.unwrap();
+        hypervisor
+            .deploy_and_wait_healthy("api", "v1", 100, 5)
+            .await
+            .unwrap();
 
         // 2. Deploy v2 with 10% traffic (canary)
-        hypervisor.deploy_and_wait_healthy("api", "v2", 10, 5).await.unwrap();
+        hypervisor
+            .deploy_and_wait_healthy("api", "v2", 10, 5)
+            .await
+            .unwrap();
 
         // Traffic split is now roughly 91% v1, 9% v2 (100:10 ratio)
         let v1_info = hypervisor.get("api", "v1").await.unwrap();

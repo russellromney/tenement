@@ -9,9 +9,13 @@
 //!
 //! Run with: cargo test --test cgroup_lifecycle -- --ignored
 
+// Helpers below are only used by the cfg(target_os = "linux") test
+// submodule; suppress dead_code warnings on macOS.
+#![allow(dead_code)]
+
 mod common;
 
-use common::{test_config_with_limits, test_config_with_process};
+use common::test_config_with_limits;
 use std::path::PathBuf;
 use tempfile::TempDir;
 
@@ -89,7 +93,7 @@ mod non_linux_tests {
 #[cfg(target_os = "linux")]
 mod linux_tests {
     use super::*;
-    use common::wait_for_socket;
+    use common::{test_config_with_process, wait_for_socket};
     use tenement::Hypervisor;
 
     // ===================
@@ -117,7 +121,10 @@ mod linux_tests {
 
         // Spawn instance
         let socket = hypervisor.spawn("api", "cgroup-test-1").await.unwrap();
-        assert!(wait_for_socket(&socket, 2000).await, "Socket should be created");
+        assert!(
+            wait_for_socket(&socket, 2000).await,
+            "Socket should be created"
+        );
 
         // Verify cgroup directory exists
         let cgroup = cgroup_path("api:cgroup-test-1");
@@ -438,10 +445,7 @@ mod linux_tests {
                 .lines()
                 .filter_map(|line| line.trim().parse().ok())
                 .collect();
-            assert!(
-                !pids.is_empty(),
-                "Should have at least one PID in cgroup"
-            );
+            assert!(!pids.is_empty(), "Should have at least one PID in cgroup");
         } else {
             panic!("cgroup.procs file should exist");
         }
@@ -575,7 +579,10 @@ mod linux_tests {
         assert!(wait_for_socket(&socket, 2000).await);
 
         let cgroup = cgroup_path("api:mem-only");
-        assert!(cgroup.exists(), "Cgroup should be created for memory-only limits");
+        assert!(
+            cgroup.exists(),
+            "Cgroup should be created for memory-only limits"
+        );
 
         // memory.max should exist
         let memory_max = cgroup.join("memory.max");
@@ -615,7 +622,10 @@ mod linux_tests {
         assert!(wait_for_socket(&socket, 2000).await);
 
         let cgroup = cgroup_path("api:cpu-only");
-        assert!(cgroup.exists(), "Cgroup should be created for CPU-only limits");
+        assert!(
+            cgroup.exists(),
+            "Cgroup should be created for CPU-only limits"
+        );
 
         // cpu.weight should exist (if cpu controller enabled)
         let cpu_weight = cgroup.join("cpu.weight");
@@ -647,16 +657,12 @@ fn test_cgroups_v2_detection() {
     );
 
     // This test just verifies the detection logic runs without error
-    assert!(true);
 }
 
 #[test]
 fn test_cgroup_path_format() {
     let path = cgroup_path("api:user123");
-    assert_eq!(
-        path,
-        PathBuf::from("/sys/fs/cgroup/tenement/api:user123")
-    );
+    assert_eq!(path, PathBuf::from("/sys/fs/cgroup/tenement/api:user123"));
 }
 
 #[test]
