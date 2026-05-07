@@ -1066,23 +1066,14 @@ async fn proxy_to_instance(
             }
         }
         None => {
-            // Weighted routing across all instances. If the chosen instance
-            // happens to have a dead socket, retry select_weighted while
-            // tracking which ids we've already probed, so repeated random
-            // picks of the same dead backend don't burn the request.
-            let candidates = state.hypervisor.list_by_process(process).await;
-            let total = candidates.len();
-            let mut tried: std::collections::HashSet<String> = std::collections::HashSet::new();
+            // Weighted routing across all instances. Happy path: use
+            // select_weighted (respects configured weights). If that pick
+            // is unreachable, fall back to a deterministic scan over the
+            // remaining candidates so a dead backend can't burn the request.
             let mut chosen: Option<(ProxyTarget, String)> = None;
-            // Bound at total + small slack: select_weighted is random, so we
-            // may need a couple of extra rolls to cover every distinct id.
-            for _ in 0..(total * 3 + 1) {
-                let Some(info) = state.hypervisor.select_weighted(process).await else {
-                    break;
-                };
-                if !tried.insert(info.id.id.clone()) {
-                    continue; // already probed; reroll
-                }
+            let mut tried: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+            if let Some(info) = state.hypervisor.select_weighted(process).await {
                 let candidate = ProxyTarget {
                     socket: info.socket.clone(),
                     port: info.port,
@@ -1090,17 +1081,33 @@ async fn proxy_to_instance(
                 if candidate.probe().await {
                     state.hypervisor.touch_activity(process, &info.id.id).await;
                     chosen = Some((candidate, info.id.id.clone()));
-                    break;
-                }
-                tracing::warn!(
-                    "Weighted pick {}:{} is unreachable; trying another instance",
-                    process,
-                    info.id.id
-                );
-                if tried.len() >= total {
-                    break; // probed every distinct backend
+                } else {
+                    tracing::warn!(
+                        "Weighted pick {}:{} is unreachable; falling back to deterministic scan",
+                        process,
+                        info.id.id
+                    );
+                    tried.insert(info.id.id.clone());
                 }
             }
+
+            if chosen.is_none() {
+                for info in state.hypervisor.list_by_process(process).await {
+                    if !tried.insert(info.id.id.clone()) {
+                        continue;
+                    }
+                    let candidate = ProxyTarget {
+                        socket: info.socket.clone(),
+                        port: info.port,
+                    };
+                    if candidate.probe().await {
+                        state.hypervisor.touch_activity(process, &info.id.id).await;
+                        chosen = Some((candidate, info.id.id.clone()));
+                        break;
+                    }
+                }
+            }
+
             match chosen {
                 Some((target, id)) => {
                     resolved_instance_id = Some(id);
