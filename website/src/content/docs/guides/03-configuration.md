@@ -81,13 +81,14 @@ startup_timeout = 30
 | `process` | macOS + Linux | ~0 | Development, trusted code |
 | `namespace` | Linux only | ~0 | **Production default.** PID + mount isolation |
 | `sandbox` | Linux only | ~20MB | Untrusted/third-party code (gVisor) |
+| `microvm` | Linux KVM | TBD | Future libkrun runtime with guest kernel boundary |
 
 ### Health checks
 
 When a `health` endpoint is configured, tenement sends HTTP GET requests to verify the instance is running:
 
 - **TCP-based instances** (process/namespace/sandbox): health checks go to `http://127.0.0.1:{port}{health}` over TCP
-- **Socket-based instances** (firecracker/qemu): health checks go over the Unix socket
+- **Socket-based instances** (future microVM runtime): health checks go over the runtime socket
 
 Health status progression: healthy -> degraded (1-2 failures) -> unhealthy (3+ failures, triggers restart) -> failed (exceeded max_restarts).
 

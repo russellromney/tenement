@@ -12,6 +12,41 @@ See [CHANGELOG.md](CHANGELOG.md) for completed work.
 - Revisit when the single-server story is more mature
 
 
+## Phase Counterfeit -- libkrun MicroVM Runtime
+> After: Phase Break Stuff · Before: Phase Everest
+
+Add one VM-backed isolation level for untrusted code: `isolation = "microvm"`, powered by libkrun.
+
+Tenement's microVM story should be opinionated. libkrun fits the project better than Firecracker because it is an embedded library for virtualization-backed process isolation, not a separate VM orchestration surface. Firecracker can be revisited later if users specifically need its ecosystem, but it should not shape the first microVM implementation.
+
+### Product shape
+- [ ] User-facing config is `isolation = "microvm"`; docs say it is powered by libkrun
+- [ ] Keep `process`, `namespace`, and `sandbox`; do not expose Firecracker/QEMU as supported choices
+- [ ] Treat microVM as the recommended level for hostile or unknown code that needs a guest kernel boundary
+- [ ] Fail loudly when KVM/libkrun/libkrunfw or required host isolation is missing
+
+### Security model
+- [ ] One libkrun VMM per tenant instance
+- [ ] Treat the guest and VMM as the same security context; the guest may influence host resources proxied by the VMM
+- [ ] Run each VMM inside host namespaces with a tenant-specific UID/GID, mount view, cgroup, and network policy
+- [ ] Expose only tenant-owned root/data directories to virtio-fs; use host mount isolation around the VMM
+- [ ] Apply memory, CPU, PID, storage, and network controls to the VMM process
+- [ ] Prefer explicit Tenement ingress to the guest app over broad guest networking
+- [ ] Document that the guest kernel boundary is defense in depth, not a replacement for jailing the VMM
+
+### Implementation checklist
+- [ ] Add `RuntimeType::Microvm` and parse `microvm` (optionally accept `krun` as an alias)
+- [ ] Add a `krun` cargo feature and a `KrunRuntime` implementing the existing `Runtime` trait
+- [ ] Decide binding strategy: existing Rust bindings if viable, otherwise minimal `bindgen`/`libloading` wrapper around libkrun's C API
+- [ ] Add config fields for microVM root, kernel/firmware path, memory, vCPUs, virtio-fs mounts, and network mode
+- [ ] Build a per-instance root/data layout from Tenement's existing `{data_dir}/{service}/{id}` model
+- [ ] Connect Tenement's proxy and health checks to the guest through libkrun's supported socket/vsock/network mechanism
+- [ ] Capture guest stdout/stderr or console logs into the existing log buffer
+- [ ] Ensure `stop`, idle shutdown, restart, cgroups, storage accounting, and metrics work for VMM-backed instances
+- [ ] Add availability diagnostics for `/dev/kvm`, libkrun, libkrunfw, and host namespace/cgroup support
+- [ ] Add ignored Linux/KVM integration tests plus unit tests for config parsing, availability errors, and lifecycle bookkeeping
+
+
 ## Phase Everest -- slum: Fleet Control Plane
 > After: Phase Break Stuff · Before: Phase Kilimanjaro
 

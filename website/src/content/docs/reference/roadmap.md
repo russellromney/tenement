@@ -75,10 +75,13 @@ description: Future development and features
 - Instance snapshots for faster spawn
 - State migration between servers
 
-### Firecracker Support
-- MicroVM isolation (128MB overhead)
-- Custom kernel support
-- Compliance-grade isolation
+### libkrun MicroVM Runtime
+- One opinionated VM-backed isolation level: `isolation = "microvm"`
+- Powered by libkrun rather than Firecracker/QEMU
+- Guest kernel boundary for hostile or unknown code
+- VMM jailed with host namespaces, cgroups, UID/GID isolation, mount restrictions, and network policy
+- Tenant-owned root/data directories exposed through narrowly scoped virtio-fs
+- Firecracker deferred unless users specifically need that ecosystem
 
 ## Long-term Vision
 
@@ -86,13 +89,13 @@ description: Future development and features
 
 ```
 Bare Process ──→ Namespace ──→ Sandbox ──→ MicroVM
-0ms, 0MB         0ms, 0MB      100ms,20MB  125ms,128MB
+0ms, 0MB         0ms, 0MB      100ms,20MB  libkrun + guest kernel
 ```
 
 Support all isolation levels seamlessly:
 - Same API and CLI
 - Configuration-driven isolation selection
-- Automatic fallback if unavailable
+- Loud availability errors instead of silent fallback
 
 ### Multi-cloud Orchestration
 
