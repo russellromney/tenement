@@ -461,6 +461,7 @@ mod tests {
             env: HashMap::new(),
             socket: PathBuf::from("/tmp/test-fc.sock"),
             workdir: None,
+            rootfs: None,
             vm_config: None,
         };
 

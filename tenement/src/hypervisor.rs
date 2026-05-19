@@ -296,6 +296,7 @@ impl Hypervisor {
             env,
             socket: socket.clone(),
             workdir: process_config.workdir.clone(),
+            rootfs: process_config.rootfs.clone(),
             vm_config: None,
         };
 

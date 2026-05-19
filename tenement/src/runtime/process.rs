@@ -96,6 +96,7 @@ mod tests {
             env: HashMap::new(),
             socket,
             workdir: None,
+            rootfs: None,
             vm_config: None,
         }
     }

@@ -419,6 +419,10 @@ pub struct SpawnConfig {
     pub socket: PathBuf,
     /// Working directory
     pub workdir: Option<PathBuf>,
+    /// Root filesystem to chroot/pivot_root into (Linux namespace runtime).
+    /// When set, the runtime enters the mount namespace, chroots into this path,
+    /// and chdirs to `workdir` *inside* the new root. Path must exist on the host.
+    pub rootfs: Option<PathBuf>,
     /// Firecracker-specific config
     pub vm_config: Option<VmConfig>,
 }

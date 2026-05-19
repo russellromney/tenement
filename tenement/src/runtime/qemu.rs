@@ -415,6 +415,7 @@ mod tests {
             env: HashMap::new(),
             socket: PathBuf::from("/tmp/test-qemu.sock"),
             workdir: None,
+            rootfs: None,
             vm_config: None,
         };
 
