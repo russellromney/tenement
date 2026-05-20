@@ -3,6 +3,7 @@
 //! Provides a trait-based abstraction that allows different runtime backends
 //! (bare processes, Linux namespaces, Firecracker VMs, QEMU, etc.) to be used interchangeably.
 
+mod litebox;
 mod namespace;
 mod process;
 
@@ -15,6 +16,7 @@ mod qemu;
 #[cfg(feature = "sandbox")]
 mod sandbox;
 
+pub use litebox::LiteBoxRuntime;
 pub use namespace::NamespaceRuntime;
 pub use process::ProcessRuntime;
 
@@ -45,6 +47,8 @@ pub enum RuntimeType {
     Namespace,
     /// gVisor sandbox - syscall filtering for untrusted code
     Sandbox,
+    /// LiteBox library-OS sandbox - run via a configurable external runner
+    Litebox,
     Firecracker,
     Qemu,
 }
@@ -55,6 +59,7 @@ impl std::fmt::Display for RuntimeType {
             RuntimeType::Process => write!(f, "process"),
             RuntimeType::Namespace => write!(f, "namespace"),
             RuntimeType::Sandbox => write!(f, "sandbox"),
+            RuntimeType::Litebox => write!(f, "litebox"),
             RuntimeType::Firecracker => write!(f, "firecracker"),
             RuntimeType::Qemu => write!(f, "qemu"),
         }
@@ -69,9 +74,10 @@ impl std::str::FromStr for RuntimeType {
             "process" => Ok(RuntimeType::Process),
             "namespace" => Ok(RuntimeType::Namespace),
             "sandbox" | "gvisor" => Ok(RuntimeType::Sandbox),
+            "litebox" => Ok(RuntimeType::Litebox),
             "firecracker" => Ok(RuntimeType::Firecracker),
             "qemu" => Ok(RuntimeType::Qemu),
-            _ => anyhow::bail!("Unknown runtime type: {}. Use 'process', 'namespace', 'sandbox', 'firecracker', or 'qemu'", s),
+            _ => anyhow::bail!("Unknown runtime type: {}. Use 'process', 'namespace', 'sandbox', 'litebox', 'firecracker', or 'qemu'", s),
         }
     }
 }
@@ -86,6 +92,8 @@ pub enum RuntimeHandle {
     Process { child: Child, socket: PathBuf },
     /// A namespaced process (Linux PID + Mount namespaces)
     Namespace { child: Child, socket: PathBuf },
+    /// A LiteBox-sandboxed process, supervised via an external runner binary
+    Litebox { child: Child, socket: PathBuf },
     /// A Firecracker microVM
     #[allow(dead_code)]
     Firecracker {
@@ -128,6 +136,7 @@ impl RuntimeHandle {
         match self {
             RuntimeHandle::Process { socket, .. } => socket,
             RuntimeHandle::Namespace { socket, .. } => socket,
+            RuntimeHandle::Litebox { socket, .. } => socket,
             RuntimeHandle::Firecracker { vsock_socket, .. } => vsock_socket,
             RuntimeHandle::Qemu { serial_socket, .. } => serial_socket,
             RuntimeHandle::Sandbox { socket, .. } => socket,
@@ -139,6 +148,7 @@ impl RuntimeHandle {
         match self {
             RuntimeHandle::Process { .. } => RuntimeType::Process,
             RuntimeHandle::Namespace { .. } => RuntimeType::Namespace,
+            RuntimeHandle::Litebox { .. } => RuntimeType::Litebox,
             RuntimeHandle::Sandbox { .. } => RuntimeType::Sandbox,
             RuntimeHandle::Firecracker { .. } => RuntimeType::Firecracker,
             RuntimeHandle::Qemu { .. } => RuntimeType::Qemu,
@@ -161,9 +171,9 @@ impl RuntimeHandle {
     /// Get the process ID (for process/namespace runtimes)
     pub fn pid(&self) -> Option<u32> {
         match self {
-            RuntimeHandle::Process { child, .. } | RuntimeHandle::Namespace { child, .. } => {
-                child.id()
-            }
+            RuntimeHandle::Process { child, .. }
+            | RuntimeHandle::Namespace { child, .. }
+            | RuntimeHandle::Litebox { child, .. } => child.id(),
             RuntimeHandle::Qemu { child, .. } => child.id(),
             // VM/sandbox runtimes don't expose a simple PID
             RuntimeHandle::Firecracker { .. } | RuntimeHandle::Sandbox { .. } => None,
@@ -173,7 +183,9 @@ impl RuntimeHandle {
     /// Kill the underlying process/VM
     pub async fn kill(&mut self) -> Result<()> {
         match self {
-            RuntimeHandle::Process { child, .. } | RuntimeHandle::Namespace { child, .. } => {
+            RuntimeHandle::Process { child, .. }
+            | RuntimeHandle::Namespace { child, .. }
+            | RuntimeHandle::Litebox { child, .. } => {
                 // Kill the entire process group (child + all descendants)
                 #[cfg(unix)]
                 if let Some(pid) = child.id() {
@@ -352,7 +364,9 @@ impl RuntimeHandle {
     /// Check if the process/VM is still running
     pub async fn is_running(&mut self) -> bool {
         match self {
-            RuntimeHandle::Process { child, .. } | RuntimeHandle::Namespace { child, .. } => {
+            RuntimeHandle::Process { child, .. }
+            | RuntimeHandle::Namespace { child, .. }
+            | RuntimeHandle::Litebox { child, .. } => {
                 // try_wait returns Ok(Some(status)) if exited, Ok(None) if still running
                 matches!(child.try_wait(), Ok(None))
             }
@@ -487,6 +501,7 @@ mod tests {
         assert_eq!(RuntimeType::Process.to_string(), "process");
         assert_eq!(RuntimeType::Namespace.to_string(), "namespace");
         assert_eq!(RuntimeType::Sandbox.to_string(), "sandbox");
+        assert_eq!(RuntimeType::Litebox.to_string(), "litebox");
         assert_eq!(RuntimeType::Firecracker.to_string(), "firecracker");
         assert_eq!(RuntimeType::Qemu.to_string(), "qemu");
     }
@@ -508,6 +523,10 @@ mod tests {
         assert_eq!(
             "gvisor".parse::<RuntimeType>().unwrap(),
             RuntimeType::Sandbox
+        );
+        assert_eq!(
+            "litebox".parse::<RuntimeType>().unwrap(),
+            RuntimeType::Litebox
         );
         assert_eq!(
             "firecracker".parse::<RuntimeType>().unwrap(),
@@ -556,6 +575,12 @@ mod tests {
 
         let parsed_sandbox: RuntimeType = serde_json::from_str("\"sandbox\"").unwrap();
         assert_eq!(parsed_sandbox, RuntimeType::Sandbox);
+
+        let rt_litebox = RuntimeType::Litebox;
+        let json_litebox = serde_json::to_string(&rt_litebox).unwrap();
+        assert_eq!(json_litebox, "\"litebox\"");
+        let parsed_litebox: RuntimeType = serde_json::from_str("\"litebox\"").unwrap();
+        assert_eq!(parsed_litebox, RuntimeType::Litebox);
 
         let parsed_qemu: RuntimeType = serde_json::from_str("\"qemu\"").unwrap();
         assert_eq!(parsed_qemu, RuntimeType::Qemu);

@@ -473,6 +473,13 @@ impl ProcessConfig {
                 );
             }
         }
+        if self.isolation == RuntimeType::Litebox && self.rootfs.is_none() {
+            anyhow::bail!(
+                "Service '{}' uses litebox isolation but 'rootfs' is not specified. \
+                 LiteBox sandboxes the app inside a rootfs; point it at the extracted app root.",
+                name
+            );
+        }
         Ok(())
     }
 
@@ -1026,6 +1033,39 @@ kernel = "/vmlinux"
         let result = secure.validate("secure");
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("rootfs"));
+    }
+
+    #[test]
+    fn test_litebox_isolation_requires_rootfs() {
+        let config_str = r#"
+[service.web]
+isolation = "litebox"
+command = "/app/server"
+"#;
+        let config = Config::from_str(config_str).unwrap();
+        let web = config.get_service("web").unwrap();
+        assert_eq!(web.isolation, RuntimeType::Litebox);
+        let err = web.validate("web").unwrap_err().to_string();
+        assert!(err.contains("rootfs"), "got: {err}");
+    }
+
+    #[test]
+    fn test_litebox_isolation_with_rootfs_ok() {
+        let config_str = r#"
+[service.web]
+isolation = "litebox"
+command = "/app/server"
+rootfs = "/var/lib/tinyhost/bundles/abc/rootfs"
+workdir = "/app"
+"#;
+        let config = Config::from_str(config_str).unwrap();
+        let web = config.get_service("web").unwrap();
+        assert_eq!(web.isolation, RuntimeType::Litebox);
+        assert_eq!(
+            web.rootfs,
+            Some(PathBuf::from("/var/lib/tinyhost/bundles/abc/rootfs"))
+        );
+        assert!(web.validate("web").is_ok());
     }
 
     #[test]
