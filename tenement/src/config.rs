@@ -1029,6 +1029,26 @@ kernel = "/vmlinux"
     }
 
     #[test]
+    fn test_namespace_isolation_accepts_rootfs() {
+        let config_str = r#"
+[service.web]
+isolation = "namespace"
+command = "/app/server"
+rootfs = "/var/lib/tinyhost/bundles/abc/rootfs"
+workdir = "/app"
+"#;
+        let config = Config::from_str(config_str).unwrap();
+        let web = config.get_service("web").unwrap();
+        assert_eq!(web.isolation, RuntimeType::Namespace);
+        assert_eq!(
+            web.rootfs,
+            Some(PathBuf::from("/var/lib/tinyhost/bundles/abc/rootfs"))
+        );
+        assert_eq!(web.workdir, Some(PathBuf::from("/app")));
+        assert!(web.validate("web").is_ok());
+    }
+
+    #[test]
     fn test_namespace_isolation_default() {
         let config_str = r#"
 [service.api]

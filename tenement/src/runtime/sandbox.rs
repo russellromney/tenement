@@ -442,6 +442,7 @@ mod tests {
             env: HashMap::new(),
             socket: PathBuf::from("/tmp/test-sandbox-runtime.sock"),
             workdir: None,
+            rootfs: None,
             vm_config: None,
         };
 
@@ -478,6 +479,7 @@ mod tests {
             env: HashMap::new(),
             socket: socket.clone(),
             workdir: None,
+            rootfs: None,
             vm_config: None,
         };
 
