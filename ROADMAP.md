@@ -12,96 +12,77 @@ See [CHANGELOG.md](CHANGELOG.md) for completed work.
 - Revisit when the single-server story is more mature
 
 
-## LiteBox Runtime
+## Runtime Direction: gVisor, Quark, LiteBox
 
-### Shipped
-`RuntimeType::Litebox` + `LiteBoxRuntime`. Tenement supervises an external,
-configurable runner binary; it does **not** embed LiteBox and carries no
-Cinch/object-store dependency. gVisor is untouched and stays the mature sandbox.
+Tenement stays runtime-pluggable. It should not bake in Tinyhost/Soup's storage
+or deployment opinions.
 
-Runner contract (Tenement -> runner):
+### Shipped / Kept
+
+- `namespace` can consume `service.rootfs` on Linux by chrooting into the
+  provided bundle root. This is useful for trusted/self-hosted loops, not as the
+  hosted untrusted boundary.
+- `sandbox` / gVisor stays in Tenement and remains the portable, no-KVM
+  baseline for untrusted apps.
+- `RuntimeType::Litebox` + `LiteBoxRuntime` is kept as an optional OSS runtime.
+  Tenement supervises an external, configurable runner binary and carries no
+  LiteBox, Cinch, or object-store dependency.
+
+LiteBox runner contract (Tenement -> runner):
+
+```text
+<runner> run --rootfs <abs> --workdir <guest-path> --env K=V... -- <cmd> [args]
 ```
-<runner> run --rootfs <abs> --workdir <guest-path> --env K=V… -- <cmd> [args]
-```
+
 - Discovery: explicit path -> `TENEMENT_LITEBOX_RUNNER` -> `litebox` on PATH.
 - Tenement allocates the TCP port, injects `PORT` via `--env`, health-checks
-  `127.0.0.1:PORT`, and supervises the child (process-group kill, log capture).
-- `service.rootfs` is required (fail-closed validation).
-- Local-filesystem rootfs is the only mode Tenement knows about; any
-  object-store backend lives entirely in the runner.
+  `127.0.0.1:PORT`, and supervises the child.
+- `service.rootfs` is required for LiteBox.
+- Local-filesystem rootfs is the only mode Tenement knows about; any object
+  storage or CinchFS behavior belongs in the runner.
 
-### Runner roadmap (downstream `tinyhost-litebox`/`soup-litebox`, not Tenement)
+### Tinyhost/Soup Runtime Decision
 
-LiteBox is Microsoft's pre-1.0 Rust **library OS** (North = rustix-like guest
-syscall surface; South = host Platform interface), MIT-licensed. We build the
-runner ourselves — it links LiteBox and hosts the guest. Conforming to the
-contract above is trivial; the hard parts are below.
+Tinyhost/Soup targets Hetzner dedicated / bare-metal hosts, where `/dev/kvm` is
+available. With KVM on the table, **Quark is the chosen CinchFS runtime bet**:
 
-#### L-1: viability spike (do this first, throwaway code, no runner)
-Each question is a potential project-killer; answer from LiteBox's own
-examples/docs before writing anything.
-- **Networking.** Can a LiteBox guest `bind`/`listen` a TCP port the host can
-  `connect` to on loopback? A library OS may have no network stack, or a
-  userspace one with no host bridge. No host-reachable socket => the
-  supervised-process-over-TCP model is dead; we'd need a stdio/vsock proxy
-  transport, or LiteBox is the wrong tool.
-- **Filesystem shape.** Does the stock FS take a host *directory* as the guest
-  root, or only an in-memory/tar image? If tar-only, the first boot needs an
-  `app.tar` (not the extracted `rootfs/`) and the FS-seam work starts at L0,
-  not L1.
-- **Embedding API.** Turnkey "run this ELF as a guest", or do we implement a
-  chunk of the loader/Platform ourselves? This sets L0's true size.
-- **Isolation strength on plain Linux.** LiteBox's security pitch leans on
-  confidential computing (SEV-SNP) and Linux-on-Windows. On a normal Linux host
-  it may be a syscall-subset with no privilege barrier, not a real boundary.
-  **Until proven, treat LiteBox as a CinchFS-integration vehicle, NOT a sandbox
-  for untrusted multi-tenant code.** gVisor stays the boundary for untrusted work.
+- OCI drop-in runtime: runs unmodified images, no LiteBox-style ELF rewriting.
+- Standard container networking: no per-instance TUN device plus host proxy.
+- KVM VM-level isolation.
+- Rust VFS seam under `qlib/kernel/fs/` with `Filesystem`,
+  `InodeOperations`, and `FileOperations` traits that can model a CinchFS
+  backend.
 
-#### L0: boot + reach, smallest possible app (no Cinch)
-- Runner skeleton + contract parser; pin a LiteBox fork commit.
-- Boot a **statically linked Rust/Go "hello" HTTP server** — NOT FastAPI; keep
-  the LiteBox-viability question separate from CPython complexity — with the
-  bundle rootfs as guest `/`, env incl. `PORT`, chdir `/app`.
-- Tenement reaches it on `127.0.0.1:PORT`; health checks pass.
-- Gate: if boot or networking fails here, stop. Off-ramp = gVisor + a CinchFS
-  shim, or drop LiteBox.
+**gVisor remains the no-KVM portable baseline** for macOS/dev loops, CI, and
+non-KVM deployment tiers such as Fly.io or Hetzner Cloud. Do not remove it.
 
-#### H0: real-app compatibility (parallel probe)
-- Run a Railpack-built CPython/FastAPI rootfs under LiteBox.
-- Expect missing syscalls (epoll, mmap, threads, `fcntl` locking). Document each
-  one the app hits; this defines the `litebox_compatible` set. If CPython won't
-  boot, the first hosted templates must be static-binary apps.
+**LiteBox is shelved for the CinchFS bet.** It is technically interesting and
+remains an optional Tenement runtime, but it is no longer the primary Tinyhost
+runtime path. Its drawbacks for this product are:
 
-#### L1: filesystem seam
-- Make LiteBox's `FileSystem` backend pluggable (sealed in-crate today;
-  fork-local impl point or upstreamable patch).
-- Wire a trivial pass-through backend to prove the plumbing before Cinch.
+- every executable ELF must be syscall-rewritten ahead of time;
+- networking wants a per-instance TUN device and host proxy;
+- stock filesystem behavior is tar/in-memory oriented rather than a normal
+  persistent host rootfs;
+- it is pre-1.0, so the filesystem adapter would ride an unstable API.
 
-#### L2: CinchFS adapter (`tinyhost-litebox-cinchfs`)
-- Per-path routing: `/app` = bundle rootfs (read-only), `/data/files` = CinchFS
-  volume (read-write), `/tmp` = ephemeral.
-- `read`/`pread` -> `read_range`; writes -> `begin_write`/`write_chunk`/
-  `commit_write`/`abort_write`; `stat`/`readdir`/`mkdir`/`unlink`/`rename` ->
-  namespace mutations with grant + quota checks.
-- Counters: whole-file fallbacks, range reads, extent writes, checkpoint
-  latency, denied ops — to *prove* `pread` uses `read_range`.
-- Fail-closed: missing/failed volume or revoked/read-only grant fails before any
-  object IO, never open.
-- **Hard sub-problem: SQLite over CinchFS.** App DBs use mmap, `fcntl` locking,
-  and WAL. Object-backed mmap + locking is the riskiest case; scope it as its
-  own spike, don't assume `write_chunk` covers it.
+### Next Runtime Work
 
-#### L3: hardening
-- Anvil LiteBox profile (hostile harness).
-- **Runner privilege posture.** The runner runs with Tenement's privileges; for
-  untrusted apps it must drop privileges so a guest escape doesn't inherit them.
-- **Checkpoint-on-stop.** Tenement currently SIGKILLs the process group, giving
-  the runner no chance to flush a CinchFS checkpoint. A graceful-stop signal
-  (SIGTERM + grace window) is a **Tenement-contract change** L3 depends on.
-- Flip `litebox_compatible` per app once it passes Anvil.
+1. Add Quark to Tenement as either:
+   - `RuntimeType::Quark`, modeled on the existing gVisor sandbox runtime; or
+   - a generalized configurable OCI runtime backend where `sandbox` can choose
+     `runsc` or `quark`.
+2. Run the Quark L0 proof on a KVM Linux host:
+   - build/install Quark as an OCI runtime;
+   - run a static HTTP server with `docker run --runtime=quark`;
+   - confirm `curl http://127.0.0.1:<host-port>/health` works with standard
+     container networking;
+   - measure startup and memory directly, not through Docker harness overhead;
+   - stub `qlib/kernel/fs/cinchfs/`, modeled on `qlib/kernel/fs/host/`, to
+     prove a custom Rust VFS backend services `open/read/write/stat` from inside
+     a Quark guest.
 
-**Carry cost.** LiteBox is pre-1.0 ("expect breaking changes"). The CinchFS
-adapter rides an unstable internal FS API; budget for churn on every fork bump.
+Do not build CinchFS yet. Runtime and filesystem-seam viability come first.
 
 
 ## Phase Everest -- slum: Fleet Control Plane
