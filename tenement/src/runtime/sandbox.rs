@@ -19,18 +19,73 @@ use anyhow::Result;
 use async_trait::async_trait;
 use std::path::PathBuf;
 
+/// Environment variable that overrides the runsc (gVisor) binary path.
+pub const RUNSC_ENV: &str = "TENEMENT_RUNSC";
+
 /// Runtime that spawns processes in gVisor sandboxed containers
 ///
 /// This provides syscall filtering for untrusted code.
 /// Uses OCI bundles with host filesystem symlinks.
 pub struct SandboxRuntime {
-    /// Optional custom path to runsc binary
+    /// Explicit runsc path (highest precedence). When `None`, discovered from
+    /// the `TENEMENT_RUNSC` env var, standard locations, then `PATH`.
     runsc_path: Option<PathBuf>,
 }
 
 impl SandboxRuntime {
     pub fn new() -> Self {
         Self { runsc_path: None }
+    }
+
+    /// Construct with an explicit runsc path (highest precedence).
+    pub fn with_runsc(path: PathBuf) -> Self {
+        Self {
+            runsc_path: Some(path),
+        }
+    }
+
+    /// Resolve the runsc binary: explicit path -> `TENEMENT_RUNSC` -> standard
+    /// locations -> `PATH`. Cross-platform so the configured path is honored
+    /// (and the field read) on every target; gVisor only actually *runs* on Linux.
+    fn find_runsc(&self) -> Result<PathBuf> {
+        if let Some(path) = &self.runsc_path {
+            if path.exists() {
+                return Ok(path.clone());
+            }
+        }
+        if let Ok(env_path) = std::env::var(RUNSC_ENV) {
+            let p = PathBuf::from(env_path);
+            if p.exists() {
+                return Ok(p);
+            }
+        }
+        for path in &[
+            "/usr/local/bin/runsc",
+            "/usr/bin/runsc",
+            "/opt/gvisor/bin/runsc",
+        ] {
+            let p = PathBuf::from(path);
+            if p.exists() {
+                return Ok(p);
+            }
+        }
+        if let Ok(path_env) = std::env::var("PATH") {
+            for dir in path_env.split(':') {
+                let p = PathBuf::from(dir).join("runsc");
+                if p.exists() {
+                    return Ok(p);
+                }
+            }
+        }
+        anyhow::bail!(
+            "gVisor (runsc) not found.\n\n\
+            Set {RUNSC_ENV}=/path/to/runsc, or install gVisor:\n  \
+            curl -fsSL https://gvisor.dev/archive.key | sudo gpg --dearmor -o /usr/share/keyrings/gvisor-archive-keyring.gpg\n  \
+            echo 'deb [arch=amd64 signed-by=/usr/share/keyrings/gvisor-archive-keyring.gpg] https://storage.googleapis.com/gvisor/releases release main' | sudo tee /etc/apt/sources.list.d/gvisor.list\n  \
+            sudo apt-get update && sudo apt-get install -y runsc\n\n\
+            Or download directly:\n  \
+            https://github.com/google/gvisor/releases"
+        )
     }
 }
 
@@ -49,48 +104,6 @@ mod linux_impl {
     use std::path::Path;
     use std::time::Duration;
     use tokio::process::Command;
-
-    /// Find runsc binary in common locations
-    pub fn find_runsc(custom_path: &Option<PathBuf>) -> Result<PathBuf> {
-        // Check custom path first
-        if let Some(ref path) = custom_path {
-            if path.exists() {
-                return Ok(path.clone());
-            }
-        }
-
-        // Check standard locations
-        for path in &[
-            "/usr/local/bin/runsc",
-            "/usr/bin/runsc",
-            "/opt/gvisor/bin/runsc",
-        ] {
-            let p = PathBuf::from(path);
-            if p.exists() {
-                return Ok(p);
-            }
-        }
-
-        // Try PATH environment variable
-        if let Ok(path_env) = std::env::var("PATH") {
-            for dir in path_env.split(':') {
-                let p = PathBuf::from(dir).join("runsc");
-                if p.exists() {
-                    return Ok(p);
-                }
-            }
-        }
-
-        anyhow::bail!(
-            "gVisor (runsc) not found.\n\n\
-            Install gVisor:\n  \
-            curl -fsSL https://gvisor.dev/archive.key | sudo gpg --dearmor -o /usr/share/keyrings/gvisor-archive-keyring.gpg\n  \
-            echo 'deb [arch=amd64 signed-by=/usr/share/keyrings/gvisor-archive-keyring.gpg] https://storage.googleapis.com/gvisor/releases release main' | sudo tee /etc/apt/sources.list.d/gvisor.list\n  \
-            sudo apt-get update && sudo apt-get install -y runsc\n\n\
-            Or download directly:\n  \
-            https://github.com/google/gvisor/releases"
-        )
-    }
 
     /// Create minimal rootfs with symlinks to host filesystem
     pub fn create_rootfs(rootfs_path: &Path) -> Result<()> {
@@ -241,11 +254,8 @@ mod linux_impl {
 
     pub async fn spawn_sandboxed(
         config: &SpawnConfig,
-        runsc_path: &Option<PathBuf>,
+        runsc_bin: PathBuf,
     ) -> Result<RuntimeHandle> {
-        // Find runsc binary
-        let runsc_bin = find_runsc(runsc_path)?;
-
         // Generate unique container ID
         let container_id = format!(
             "tenement-{}",
@@ -352,7 +362,8 @@ impl Runtime for SandboxRuntime {
     async fn spawn(&self, config: &SpawnConfig) -> Result<RuntimeHandle> {
         #[cfg(target_os = "linux")]
         {
-            linux_impl::spawn_sandboxed(config, &self.runsc_path).await
+            let runsc_bin = self.find_runsc()?;
+            linux_impl::spawn_sandboxed(config, runsc_bin).await
         }
         #[cfg(not(target_os = "linux"))]
         {
@@ -372,14 +383,9 @@ impl Runtime for SandboxRuntime {
     }
 
     fn is_available(&self) -> bool {
-        #[cfg(target_os = "linux")]
-        {
-            linux_impl::find_runsc(&self.runsc_path).is_ok()
-        }
-        #[cfg(not(target_os = "linux"))]
-        {
-            false
-        }
+        // gVisor only runs on Linux. `find_runsc` reads `runsc_path` on every
+        // target, so the field is never "dead" even where gVisor can't run.
+        cfg!(target_os = "linux") && self.find_runsc().is_ok()
     }
 
     fn name(&self) -> &'static str {
