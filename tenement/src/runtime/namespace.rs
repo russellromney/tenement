@@ -80,8 +80,7 @@ mod linux_impl {
         // pre_exec is async-signal-context; no allocations or panics allowed.
         let rootfs_c = match &config.rootfs {
             Some(p) => Some(
-                CString::new(p.as_os_str().as_bytes())
-                    .context("rootfs path contains NUL byte")?,
+                CString::new(p.as_os_str().as_bytes()).context("rootfs path contains NUL byte")?,
             ),
             None => None,
         };
