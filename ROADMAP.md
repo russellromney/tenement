@@ -12,6 +12,79 @@ See [CHANGELOG.md](CHANGELOG.md) for completed work.
 - Revisit when the single-server story is more mature
 
 
+## Runtime Direction: gVisor, Quark, LiteBox
+
+Tenement stays runtime-pluggable. It should not bake in Tinyhost/Soup's storage
+or deployment opinions.
+
+### Shipped / Kept
+
+- `namespace` can consume `service.rootfs` on Linux by chrooting into the
+  provided bundle root. This is useful for trusted/self-hosted loops, not as the
+  hosted untrusted boundary.
+- `sandbox` / gVisor stays in Tenement and remains the portable, no-KVM
+  baseline for untrusted apps.
+- `RuntimeType::Litebox` + `LiteBoxRuntime` is kept as an optional OSS runtime.
+  Tenement supervises an external, configurable runner binary and carries no
+  LiteBox, Cinch, or object-store dependency.
+
+LiteBox runner contract (Tenement -> runner):
+
+```text
+<runner> run --rootfs <abs> --workdir <guest-path> --env K=V... -- <cmd> [args]
+```
+
+- Discovery: explicit path -> `TENEMENT_LITEBOX_RUNNER` -> `litebox` on PATH.
+- Tenement allocates the TCP port, injects `PORT` via `--env`, health-checks
+  `127.0.0.1:PORT`, and supervises the child.
+- `service.rootfs` is required for LiteBox.
+- Local-filesystem rootfs is the only mode Tenement knows about; any object
+  storage or CinchFS behavior belongs in the runner.
+
+### Tinyhost/Soup Runtime Decision
+
+Tinyhost/Soup targets Hetzner dedicated / bare-metal hosts, where `/dev/kvm` is
+available. With KVM on the table, **Quark is the chosen CinchFS runtime bet**:
+
+- OCI drop-in runtime: runs unmodified images, no LiteBox-style ELF rewriting.
+- Standard container networking: no per-instance TUN device plus host proxy.
+- KVM VM-level isolation.
+- Rust VFS seam under `qlib/kernel/fs/` with `Filesystem`,
+  `InodeOperations`, and `FileOperations` traits that can model a CinchFS
+  backend.
+
+**gVisor remains the no-KVM portable baseline** for macOS/dev loops, CI, and
+non-KVM deployment tiers such as Fly.io or Hetzner Cloud. Do not remove it.
+
+**LiteBox is shelved for the CinchFS bet.** It is technically interesting and
+remains an optional Tenement runtime, but it is no longer the primary Tinyhost
+runtime path. Its drawbacks for this product are:
+
+- every executable ELF must be syscall-rewritten ahead of time;
+- networking wants a per-instance TUN device and host proxy;
+- stock filesystem behavior is tar/in-memory oriented rather than a normal
+  persistent host rootfs;
+- it is pre-1.0, so the filesystem adapter would ride an unstable API.
+
+### Next Runtime Work
+
+1. Add Quark to Tenement as either:
+   - `RuntimeType::Quark`, modeled on the existing gVisor sandbox runtime; or
+   - a generalized configurable OCI runtime backend where `sandbox` can choose
+     `runsc` or `quark`.
+2. Run the Quark L0 proof on a KVM Linux host:
+   - build/install Quark as an OCI runtime;
+   - run a static HTTP server with `docker run --runtime=quark`;
+   - confirm `curl http://127.0.0.1:<host-port>/health` works with standard
+     container networking;
+   - measure startup and memory directly, not through Docker harness overhead;
+   - stub `qlib/kernel/fs/cinchfs/`, modeled on `qlib/kernel/fs/host/`, to
+     prove a custom Rust VFS backend services `open/read/write/stat` from inside
+     a Quark guest.
+
+Do not build CinchFS yet. Runtime and filesystem-seam viability come first.
+
+
 ## Phase Everest -- slum: Fleet Control Plane
 > After: Phase Break Stuff · Before: Phase Kilimanjaro
 
