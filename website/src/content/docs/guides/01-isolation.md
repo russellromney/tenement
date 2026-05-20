@@ -12,7 +12,7 @@ tenement provides multiple isolation levels for different security needs.
 | **process** | bare | ~0 | <10ms | Same trust boundary, debugging |
 | **namespace** | unshare | ~0 | <10ms | **Default** - trusted code, /proc isolated |
 | **sandbox** | gVisor | ~20MB | <100ms | Untrusted/multi-tenant code |
-| **firecracker** | microVM | ~128MB | ~125ms | Compliance, custom kernel |
+| **microvm** | libkrun | TBD | TBD | Untrusted code, guest kernel boundary |
 
 ## 1. Bare Process (No Isolation)
 
@@ -127,11 +127,13 @@ cpu_shares = 50                # Limited CPU
 
 API runs in namespace isolation (trusted, fast). User plugins run in gVisor sandbox (untrusted, safe).
 
-## 4. Firecracker Isolation (Future)
+## 4. MicroVM Isolation (Future)
 
-MicroVM isolation with Firecracker. ~128MB overhead, compliance-grade isolation.
+MicroVM isolation with libkrun. This adds a guest kernel boundary for hostile or unknown code while keeping Tenement's process-like spawn, route, health check, and hibernation model.
 
 Planned for future releases.
+
+The VMM is not trusted just because the guest runs behind a VM boundary. Tenement will run each libkrun VMM inside host-side namespaces, cgroups, UID/GID isolation, mount restrictions, and network policy. Guest and VMM should be treated as one security context because the VMM proxies host resources such as filesystem and networking access.
 
 ## Decision Flowchart
 
@@ -169,8 +171,8 @@ Planned for future releases.
 **Quick decision:**
 - **Trusted code + multi-tenant** → `namespace` (default)
 - **Trusted code + debugging** → `process`
-- **Untrusted code** → `sandbox`
-- **Compliance/custom kernel** → `firecracker` or `qemu`
+- **Untrusted code needing syscall filtering** → `sandbox`
+- **Untrusted code needing a guest kernel boundary** → `microvm`
 
 ## Choosing the Right Level
 
@@ -193,6 +195,19 @@ isolation = "namespace"
 [service.user_code]
 isolation = "sandbox"
 memory_limit_mb = 256
+cpu_shares = 100
+```
+
+### Hostile or Unknown Code
+→ **Use microVM isolation** when available
+- Tenant code gets its own guest kernel
+- The libkrun VMM is still jailed by the host
+- Best fit for code sandboxes, agent workspaces, and third-party execution
+
+```toml
+[service.user_code]
+isolation = "microvm"
+memory_limit_mb = 512
 cpu_shares = 100
 ```
 
@@ -232,6 +247,12 @@ isolation = "process"
 - **What it protects against:** Most user-space exploits, kernel-facing attacks
 - **What it doesn't protect:** Bugs in gVisor itself, hardware exploits
 - **Best for:** Untrusted code, plugins, third-party services
+
+### MicroVM Isolation
+
+- **What it protects against:** Direct host-kernel syscall exposure from tenant code
+- **What it doesn't protect:** Misconfigured VMM host access, broad virtio-fs mounts, broad network proxying
+- **Best for:** Hostile or unknown code that warrants a guest kernel boundary
 
 ### Defense in Depth
 
