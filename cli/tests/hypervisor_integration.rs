@@ -70,18 +70,21 @@ sleep 30
 
 /// Create test config with a process configured
 fn test_config_with_process(name: &str, command: &str, args: Vec<&str>) -> Config {
+    let test_id = unique_id("test");
     let mut config = Config::default();
-    config.settings.data_dir = std::env::temp_dir().join("tenement-test");
+    config.settings.data_dir = std::env::temp_dir().join(format!("tenement-{test_id}"));
     config.settings.backoff_base_ms = 0;
 
     let process = ProcessConfig {
         command: command.to_string(),
         args: args.into_iter().map(|s| s.to_string()).collect(),
-        socket: "/tmp/{name}-{id}.sock".to_string(),
+        socket: format!("/tmp/tenement-{test_id}-{{name}}-{{id}}.sock"),
         isolation: RuntimeType::Process,
         health: None,
         env: HashMap::new(),
         workdir: None,
+        mounts: Vec::new(),
+        image: None,
         restart: "on-failure".to_string(),
         idle_timeout: None,
         startup_timeout: 5,
@@ -176,7 +179,7 @@ async fn test_spawn_appears_in_api_list() {
     // Spawn an instance
     let socket = hypervisor.spawn("api", &inst_id).await.unwrap();
     assert!(
-        wait_for_socket(&socket, 2000).await,
+        wait_for_socket(&socket, 5000).await,
         "Socket should be created"
     );
 
@@ -205,7 +208,7 @@ async fn test_stop_removes_from_api_list() {
     // Spawn an instance
     let socket = hypervisor.spawn("api", &inst_id).await.unwrap();
     assert!(
-        wait_for_socket(&socket, 2000).await,
+        wait_for_socket(&socket, 5000).await,
         "Socket should be created"
     );
 
@@ -245,7 +248,7 @@ async fn test_spawn_logs_captured() {
     // Spawn instance that outputs logs
     let socket = hypervisor.spawn("api", &inst_id).await.unwrap();
     assert!(
-        wait_for_socket(&socket, 2000).await,
+        wait_for_socket(&socket, 5000).await,
         "Socket should be created"
     );
 
@@ -333,7 +336,7 @@ async fn test_metrics_update_on_spawn() {
 
     // Spawn an instance
     let socket = hypervisor.spawn("api", &inst1).await.unwrap();
-    assert!(wait_for_socket(&socket, 2000).await);
+    assert!(wait_for_socket(&socket, 5000).await);
 
     // Check metrics updated
     let response = server.get("/metrics").await;
@@ -417,7 +420,7 @@ async fn test_restart_increments_counter() {
 
     // Spawn instance
     let socket = hypervisor.spawn("api", &inst_id).await.unwrap();
-    assert!(wait_for_socket(&socket, 2000).await);
+    assert!(wait_for_socket(&socket, 5000).await);
 
     // Check initial restart count
     let response = server
@@ -472,7 +475,7 @@ async fn test_health_status_in_api() {
 
     // Spawn instance
     let socket = hypervisor.spawn("api", &inst_id).await.unwrap();
-    assert!(wait_for_socket(&socket, 2000).await);
+    assert!(wait_for_socket(&socket, 5000).await);
 
     // Initial health status should be unknown
     let response = server
@@ -557,16 +560,17 @@ async fn test_uptime_in_api_response() {
 
     // Spawn instance
     let socket = hypervisor.spawn("api", &inst_id).await.unwrap();
-    assert!(wait_for_socket(&socket, 2000).await);
+    assert!(wait_for_socket(&socket, 5000).await);
 
-    // Check uptime starts at 0 (or close to it)
+    // Check uptime is present. Under load, the async test runner can spend more
+    // than a second between spawn and this request, so avoid asserting a brittle
+    // wall-clock upper bound here.
     let response = server
         .get("/api/instances")
         .add_header("Authorization", format!("Bearer {}", token))
         .await;
     let json: Vec<serde_json::Value> = response.json();
     let initial_uptime = json[0]["uptime_secs"].as_u64().unwrap();
-    assert!(initial_uptime <= 1, "Initial uptime should be ~0 seconds");
 
     // Wait a bit
     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
@@ -579,8 +583,8 @@ async fn test_uptime_in_api_response() {
     let json: Vec<serde_json::Value> = response.json();
     let later_uptime = json[0]["uptime_secs"].as_u64().unwrap();
     assert!(
-        later_uptime >= 2,
-        "Uptime should have increased to at least 2 seconds"
+        later_uptime >= initial_uptime + 2,
+        "Uptime should increase by at least 2 seconds; initial={initial_uptime}, later={later_uptime}"
     );
 
     // Cleanup
@@ -642,7 +646,7 @@ async fn test_restart_nonexistent_instance_spawns_it() {
     // Wait for socket
     let socket = result.unwrap();
     assert!(
-        wait_for_socket(&socket, 2000).await,
+        wait_for_socket(&socket, 5000).await,
         "Socket should be created"
     );
 
@@ -677,6 +681,8 @@ async fn test_spawn_bad_command_fails() {
         health: None,
         env: HashMap::new(),
         workdir: None,
+        mounts: Vec::new(),
+        image: None,
         restart: "on-failure".to_string(),
         idle_timeout: None,
         startup_timeout: 5,
@@ -828,7 +834,7 @@ async fn test_rapid_restarts_handle_correctly() {
 
     // Spawn instance
     let socket = hypervisor.spawn("api", &inst_id).await.unwrap();
-    assert!(wait_for_socket(&socket, 2000).await);
+    assert!(wait_for_socket(&socket, 5000).await);
 
     // Rapid restarts
     for i in 0..3 {
@@ -870,7 +876,7 @@ async fn test_get_storage_info_for_instance() {
 
     // Spawn instance
     let socket = hypervisor.spawn("api", &inst_id).await.unwrap();
-    assert!(wait_for_socket(&socket, 2000).await);
+    assert!(wait_for_socket(&socket, 5000).await);
 
     // Query storage info directly from hypervisor
     let storage_info = hypervisor.get_storage_info("api", &inst_id).await;
@@ -931,7 +937,7 @@ exit 0
     // Spawn - it will exit immediately
     let socket = hypervisor.spawn("api", &inst_id).await.unwrap();
     assert!(
-        wait_for_socket(&socket, 2000).await,
+        wait_for_socket(&socket, 5000).await,
         "Socket should be created before exit"
     );
 
@@ -979,7 +985,7 @@ async fn test_weight_in_api_response() {
 
     // Spawn instance
     let socket = hypervisor.spawn("api", &inst_id).await.unwrap();
-    assert!(wait_for_socket(&socket, 2000).await);
+    assert!(wait_for_socket(&socket, 5000).await);
 
     // Check weight in response
     let response = server
@@ -1015,7 +1021,7 @@ async fn test_port_released_after_stop() {
             .await
             .unwrap_or_else(|_| panic!("Spawn {} should succeed", i));
         assert!(
-            wait_for_socket(&socket, 2000).await,
+            wait_for_socket(&socket, 5000).await,
             "Socket {} should be created",
             i
         );

@@ -201,6 +201,10 @@ mod tests {
             workdir: Some(PathBuf::from("/app")),
             rootfs,
             vm_config: None,
+            mounts: Vec::new(),
+            image: None,
+            memory_limit_mb: None,
+            cpu_shares: None,
         }
     }
 
@@ -277,7 +281,6 @@ mod tests {
         assert_eq!(handle.runtime_type(), RuntimeType::Litebox);
 
         // Poll for the runner to write its argv (robust under load) rather than
-        // sleeping a fixed amount.
         let mut argv = String::new();
         for _ in 0..100 {
             if let Ok(s) = std::fs::read_to_string(&argv_dump) {

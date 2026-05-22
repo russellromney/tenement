@@ -6,11 +6,13 @@ use crate::instance::{HealthStatus, Instance, InstanceId, InstanceInfo};
 use crate::logs::LogBuffer;
 use crate::metrics::Metrics;
 use crate::port_allocator::PortAllocator;
+use crate::runtime::LiteBoxRuntime;
+#[cfg(feature = "quark")]
+use crate::runtime::QuarkRuntime;
 #[cfg(feature = "sandbox")]
 use crate::runtime::SandboxRuntime;
 use crate::runtime::{
-    LiteBoxRuntime, NamespaceRuntime, ProcessRuntime, Runtime, RuntimeHandle, RuntimeType,
-    SpawnConfig,
+    Mount, NamespaceRuntime, ProcessRuntime, Runtime, RuntimeHandle, RuntimeType, SpawnConfig,
 };
 use crate::storage::{calculate_dir_size, StorageInfo};
 use anyhow::{Context, Result};
@@ -59,11 +61,14 @@ pub struct Hypervisor {
     process_runtime: ProcessRuntime,
     /// Namespace runtime (default on Linux)
     namespace_runtime: NamespaceRuntime,
+    /// LiteBox runtime - supervised external runner
+    litebox_runtime: LiteBoxRuntime,
     /// Sandbox runtime (gVisor) - requires runsc
     #[cfg(feature = "sandbox")]
     sandbox_runtime: SandboxRuntime,
-    /// LiteBox runtime - supervises an external, configurable runner binary
-    litebox_runtime: LiteBoxRuntime,
+    /// Quark runtime (KVM OCI) - requires Docker with a `quark` runtime + /dev/kvm
+    #[cfg(feature = "quark")]
+    quark_runtime: QuarkRuntime,
     /// Cgroup manager for resource limits (Linux cgroups v2)
     cgroup_manager: CgroupManager,
     /// Optional state store for crash recovery persistence
@@ -89,9 +94,11 @@ impl Hypervisor {
             port_allocator,
             process_runtime: ProcessRuntime::new(),
             namespace_runtime,
+            litebox_runtime: LiteBoxRuntime::new(),
             #[cfg(feature = "sandbox")]
             sandbox_runtime: SandboxRuntime::new(),
-            litebox_runtime: LiteBoxRuntime::new(),
+            #[cfg(feature = "quark")]
+            quark_runtime: QuarkRuntime::new(),
             cgroup_manager,
             state_store: None,
         })
@@ -115,9 +122,11 @@ impl Hypervisor {
             port_allocator,
             process_runtime: ProcessRuntime::new(),
             namespace_runtime,
+            litebox_runtime: LiteBoxRuntime::new(),
             #[cfg(feature = "sandbox")]
             sandbox_runtime: SandboxRuntime::new(),
-            litebox_runtime: LiteBoxRuntime::new(),
+            #[cfg(feature = "quark")]
+            quark_runtime: QuarkRuntime::new(),
             cgroup_manager,
             state_store: None,
         })
@@ -215,6 +224,17 @@ impl Hypervisor {
                 }
             }
             RuntimeType::Process => {}
+            RuntimeType::Litebox => {
+                if !self.litebox_runtime.is_available() {
+                    anyhow::bail!(
+                        "Instance {}: litebox isolation requires a LiteBox runner.\n\
+                         Set TENEMENT_LITEBOX_RUNNER=/path/to/runner or put a `litebox` \
+                         binary on PATH. Tenement supervises an external runner; it does \
+                         not embed LiteBox.",
+                        instance_id
+                    );
+                }
+            }
             RuntimeType::Sandbox => {
                 #[cfg(feature = "sandbox")]
                 {
@@ -236,13 +256,25 @@ impl Hypervisor {
                     );
                 }
             }
-            RuntimeType::Litebox => {
-                if !self.litebox_runtime.is_available() {
+            RuntimeType::Quark => {
+                #[cfg(feature = "quark")]
+                {
+                    if !self.quark_runtime.is_available() {
+                        anyhow::bail!(
+                            "Instance {}: quark isolation requires Docker/containerd with a \
+                             registered `quark` OCI runtime and /dev/kvm.\n\
+                             Install Docker, register a `quark` runtime in daemon config, \
+                             and ensure the runtime can access /dev/kvm (group `kvm`).\n\
+                             Or use isolation = \"sandbox\" / \"namespace\".",
+                            instance_id
+                        );
+                    }
+                }
+                #[cfg(not(feature = "quark"))]
+                {
                     anyhow::bail!(
-                        "Instance {}: litebox isolation requires a LiteBox runner.\n\
-                        Set TENEMENT_LITEBOX_RUNNER=/path/to/runner or put a `litebox` \
-                        binary on PATH. Tenement supervises an external runner; it does \
-                        not embed LiteBox.",
+                        "Instance {}: quark isolation requires the 'quark' feature.\n\
+                        Compile with: cargo build --features quark",
                         instance_id
                     );
                 }
@@ -266,8 +298,9 @@ impl Hypervisor {
         let port = match isolation {
             RuntimeType::Process
             | RuntimeType::Namespace
+            | RuntimeType::Litebox
             | RuntimeType::Sandbox
-            | RuntimeType::Litebox => Some(
+            | RuntimeType::Quark => Some(
                 self.port_allocator
                     .allocate()
                     .await
@@ -317,17 +350,33 @@ impl Hypervisor {
             workdir: process_config.workdir.clone(),
             rootfs: process_config.rootfs.clone(),
             vm_config: None,
+            mounts: process_config
+                .mounts
+                .iter()
+                .map(|m| Mount {
+                    source: m.source.clone(),
+                    destination: m.destination.clone(),
+                    readonly: m.readonly,
+                })
+                .collect(),
+            image: process_config.image.clone(),
+            memory_limit_mb: process_config.memory_limit_mb,
+            cpu_shares: process_config.cpu_shares,
         };
 
         // Spawn using the selected isolation level (we already validated it's available above)
         let mut handle = match isolation {
             RuntimeType::Namespace => self.namespace_runtime.spawn(&spawn_config).await?,
             RuntimeType::Process => self.process_runtime.spawn(&spawn_config).await?,
+            RuntimeType::Litebox => self.litebox_runtime.spawn(&spawn_config).await?,
             #[cfg(feature = "sandbox")]
             RuntimeType::Sandbox => self.sandbox_runtime.spawn(&spawn_config).await?,
             #[cfg(not(feature = "sandbox"))]
             RuntimeType::Sandbox => unreachable!("sandbox feature not enabled"),
-            RuntimeType::Litebox => self.litebox_runtime.spawn(&spawn_config).await?,
+            #[cfg(feature = "quark")]
+            RuntimeType::Quark => self.quark_runtime.spawn(&spawn_config).await?,
+            #[cfg(not(feature = "quark"))]
+            RuntimeType::Quark => unreachable!("quark feature not enabled"),
             // Firecracker/Qemu already rejected above
             _ => unreachable!(),
         };
@@ -337,7 +386,9 @@ impl Hypervisor {
             memory_limit_mb: process_config.memory_limit_mb,
             cpu_shares: process_config.cpu_shares,
         };
-        if resource_limits.has_limits() {
+        if resource_limits.has_limits()
+            && !matches!(isolation, RuntimeType::Sandbox | RuntimeType::Quark)
+        {
             // Create cgroup and add process. Fail loudly if resource limits are
             // configured but can't be applied (process would run unrestricted).
             if let Err(e) = self
@@ -369,8 +420,7 @@ impl Hypervisor {
             }
         }
 
-        // Set up log capture for process-based runtimes (Process, Namespace, and
-        // LiteBox all supervise a child with piped stdout/stderr).
+        // Set up log capture for runtimes where Tenement owns a child process.
         match &mut handle {
             RuntimeHandle::Process { ref mut child, .. }
             | RuntimeHandle::Namespace { ref mut child, .. }
@@ -1630,6 +1680,8 @@ mod tests {
             health: None,
             env: HashMap::new(),
             workdir: None,
+            mounts: Vec::new(),
+            image: None,
             restart: "on-failure".to_string(),
             idle_timeout: None,
             startup_timeout: 5,
@@ -2497,6 +2549,8 @@ sleep 30
                 health: None,
                 env: HashMap::new(),
                 workdir: None,
+                mounts: Vec::new(),
+                image: None,
                 restart: "on-failure".to_string(),
                 idle_timeout: None,
                 startup_timeout: 5,

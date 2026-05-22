@@ -17,6 +17,7 @@ default = []
 firecracker = []
 qemu = []
 sandbox = ["uuid"]
+quark = ["uuid"]
 
 [dependencies]
 tokio.workspace = true

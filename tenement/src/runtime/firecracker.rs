@@ -463,6 +463,7 @@ mod tests {
             workdir: None,
             rootfs: None,
             vm_config: None,
+            ..Default::default()
         };
 
         let result = runtime.spawn(&config).await;

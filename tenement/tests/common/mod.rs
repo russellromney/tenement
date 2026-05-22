@@ -29,6 +29,8 @@ pub fn test_config_with_process(name: &str, command: &str, args: Vec<&str>) -> C
         health: None,
         env: HashMap::new(),
         workdir: None,
+        mounts: Vec::new(),
+        image: None,
         restart: "on-failure".to_string(),
         idle_timeout: None,
         startup_timeout: 5,

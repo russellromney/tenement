@@ -136,7 +136,7 @@ This pairs well with SQLite. Each customer gets their own database file, replica
 
 Tenement does subdomain routing (`alice.api.example.com` routes to `api:alice`), scale-to-zero with wake-on-request, per-tenant data directories, process isolation via Linux namespaces, HTTP health checks with exponential backoff, weighted routing for blue-green and canary deployments, built-in TLS via Let's Encrypt, Prometheus metrics, log capture with full-text search, and a bearer token auth system for the management API with both admin and tenant-scoped tokens.
 
-Commands like `uv run python app.py` or `go run main.go` are shell-split automatically, and every instance runs in its own process group so killing it also kills any child processes. No orphans.
+Commands like `uv run python app.py` or `go run main.go` are shell-split automatically. Process and namespace instances run in their own process group so killing them also kills any child processes.
 
 ## CLI
 
