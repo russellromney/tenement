@@ -171,6 +171,19 @@ fn default_backoff_max_ms() -> u64 {
     60000 // 60 seconds
 }
 
+/// A host->guest bind mount for OCI runtimes (Quark). Rendered by Tinyhost as
+/// `[[service.<name>.mounts]]`. Non-OCI runtimes ignore these.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MountConfig {
+    /// Host source path
+    pub source: PathBuf,
+    /// Guest destination path (absolute, inside the rootfs)
+    pub destination: PathBuf,
+    /// Mount read-only (default false)
+    #[serde(default)]
+    pub readonly: bool,
+}
+
 /// Service template definition (also known as ProcessConfig for backwards compatibility)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProcessConfig {
@@ -203,6 +216,15 @@ pub struct ProcessConfig {
     /// Working directory
     #[serde(default)]
     pub workdir: Option<PathBuf>,
+
+    /// Host->guest bind mounts for OCI runtimes (Quark). Other runtimes ignore.
+    #[serde(default)]
+    pub mounts: Vec<MountConfig>,
+
+    /// OCI image reference. Required for container runtimes that run via
+    /// docker/containerd (e.g. `isolation = "quark"`); ignored otherwise.
+    #[serde(default)]
+    pub image: Option<String>,
 
     /// Restart policy: "always", "on-failure", "never"
     #[serde(default = "default_restart_policy")]
@@ -478,6 +500,16 @@ impl ProcessConfig {
                 "Service '{}' uses litebox isolation but 'rootfs' is not specified. \
                  LiteBox sandboxes the app inside a rootfs; point it at the extracted app root.",
                 name
+            );
+        }
+        if matches!(self.isolation, RuntimeType::Sandbox | RuntimeType::Quark)
+            && self.image.is_none()
+        {
+            anyhow::bail!(
+                "Service '{}' uses {} isolation but 'image' is not specified. \
+                 Container runtimes require an OCI image reference.",
+                name,
+                self.isolation
             );
         }
         Ok(())
@@ -1065,6 +1097,51 @@ workdir = "/app"
             web.rootfs,
             Some(PathBuf::from("/var/lib/tinyhost/bundles/abc/rootfs"))
         );
+        assert!(web.validate("web").is_ok());
+    }
+
+    #[test]
+    fn test_quark_isolation_requires_image() {
+        let config_str = r#"
+[service.web]
+isolation = "quark"
+command = "/app/server"
+"#;
+        let config = Config::from_str(config_str).unwrap();
+        let web = config.get_service("web").unwrap();
+        assert_eq!(web.isolation, RuntimeType::Quark);
+        let err = web.validate("web").unwrap_err().to_string();
+        assert!(err.contains("image"), "got: {err}");
+    }
+
+    #[test]
+    fn test_container_runtime_image_and_mounts_parse() {
+        let config_str = r#"
+[service.web]
+isolation = "quark"
+image = "soup/web:abc123"
+command = "/app/server"
+workdir = "/app"
+
+[[service.web.mounts]]
+source = "/srv/tenant/data"
+destination = "/data"
+readonly = false
+
+[[service.web.mounts]]
+source = "/srv/tenant/config"
+destination = "/config"
+readonly = true
+"#;
+        let config = Config::from_str(config_str).unwrap();
+        let web = config.get_service("web").unwrap();
+        assert_eq!(web.isolation, RuntimeType::Quark);
+        assert_eq!(web.image.as_deref(), Some("soup/web:abc123"));
+        assert_eq!(web.mounts.len(), 2);
+        assert_eq!(web.mounts[0].destination, PathBuf::from("/data"));
+        assert!(!web.mounts[0].readonly);
+        assert_eq!(web.mounts[1].source, PathBuf::from("/srv/tenant/config"));
+        assert!(web.mounts[1].readonly);
         assert!(web.validate("web").is_ok());
     }
 

@@ -98,6 +98,7 @@ mod tests {
             workdir: None,
             rootfs: None,
             vm_config: None,
+            ..Default::default()
         }
     }
 

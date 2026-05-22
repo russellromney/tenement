@@ -16,6 +16,13 @@ mod qemu;
 #[cfg(feature = "sandbox")]
 mod sandbox;
 
+#[cfg(feature = "quark")]
+mod quark;
+
+// Shared docker/containerd helper for the container runtimes (quark, sandbox).
+#[cfg(any(feature = "quark", feature = "sandbox"))]
+mod container;
+
 pub use litebox::LiteBoxRuntime;
 pub use namespace::NamespaceRuntime;
 pub use process::ProcessRuntime;
@@ -28,6 +35,9 @@ pub use qemu::QemuRuntime;
 
 #[cfg(feature = "sandbox")]
 pub use sandbox::SandboxRuntime;
+
+#[cfg(feature = "quark")]
+pub use quark::QuarkRuntime;
 
 use anyhow::Result;
 use async_trait::async_trait;
@@ -49,6 +59,8 @@ pub enum RuntimeType {
     Sandbox,
     /// LiteBox library-OS sandbox - run via a configurable external runner
     Litebox,
+    /// Quark - KVM-backed OCI runtime that boots the bundle rootfs as the guest /
+    Quark,
     Firecracker,
     Qemu,
 }
@@ -60,6 +72,7 @@ impl std::fmt::Display for RuntimeType {
             RuntimeType::Namespace => write!(f, "namespace"),
             RuntimeType::Sandbox => write!(f, "sandbox"),
             RuntimeType::Litebox => write!(f, "litebox"),
+            RuntimeType::Quark => write!(f, "quark"),
             RuntimeType::Firecracker => write!(f, "firecracker"),
             RuntimeType::Qemu => write!(f, "qemu"),
         }
@@ -75,9 +88,10 @@ impl std::str::FromStr for RuntimeType {
             "namespace" => Ok(RuntimeType::Namespace),
             "sandbox" | "gvisor" => Ok(RuntimeType::Sandbox),
             "litebox" => Ok(RuntimeType::Litebox),
+            "quark" => Ok(RuntimeType::Quark),
             "firecracker" => Ok(RuntimeType::Firecracker),
             "qemu" => Ok(RuntimeType::Qemu),
-            _ => anyhow::bail!("Unknown runtime type: {}. Use 'process', 'namespace', 'sandbox', 'litebox', 'firecracker', or 'qemu'", s),
+            _ => anyhow::bail!("Unknown runtime type: {}. Use 'process', 'namespace', 'sandbox', 'litebox', 'quark', 'firecracker', or 'qemu'", s),
         }
     }
 }
@@ -116,16 +130,25 @@ pub enum RuntimeHandle {
         /// Path to virtio-serial socket for guest communication
         serial_socket: PathBuf,
     },
-    /// A gVisor sandboxed container
+    /// A gVisor (runsc) container, run via docker/containerd
+    /// (`docker run -d --runtime=runsc ...`). Tracked by container name, like
+    /// [`RuntimeHandle::Quark`].
     #[allow(dead_code)]
     Sandbox {
-        /// Container ID (for runsc commands)
-        container_id: String,
-        /// Path to OCI bundle directory
-        bundle_path: PathBuf,
-        /// Path to runsc state directory
-        state_dir: PathBuf,
-        /// Socket path (bind-mounted into container)
+        /// docker container name
+        name: String,
+        /// Socket path (unused for TCP routing; kept for the trait)
+        socket: PathBuf,
+    },
+    /// A Quark (KVM) OCI container, run via docker/containerd
+    /// (`docker run -d --runtime=quark ...`). We track it by container name and
+    /// drive it with `docker` rather than holding a process — the container is
+    /// owned by the docker/containerd daemon, not by us.
+    #[allow(dead_code)]
+    Quark {
+        /// docker container name
+        name: String,
+        /// Socket path (unused for TCP routing; kept for the trait)
         socket: PathBuf,
     },
 }
@@ -140,6 +163,7 @@ impl RuntimeHandle {
             RuntimeHandle::Firecracker { vsock_socket, .. } => vsock_socket,
             RuntimeHandle::Qemu { serial_socket, .. } => serial_socket,
             RuntimeHandle::Sandbox { socket, .. } => socket,
+            RuntimeHandle::Quark { socket, .. } => socket,
         }
     }
 
@@ -150,6 +174,7 @@ impl RuntimeHandle {
             RuntimeHandle::Namespace { .. } => RuntimeType::Namespace,
             RuntimeHandle::Litebox { .. } => RuntimeType::Litebox,
             RuntimeHandle::Sandbox { .. } => RuntimeType::Sandbox,
+            RuntimeHandle::Quark { .. } => RuntimeType::Quark,
             RuntimeHandle::Firecracker { .. } => RuntimeType::Firecracker,
             RuntimeHandle::Qemu { .. } => RuntimeType::Qemu,
         }
@@ -175,8 +200,10 @@ impl RuntimeHandle {
             | RuntimeHandle::Namespace { child, .. }
             | RuntimeHandle::Litebox { child, .. } => child.id(),
             RuntimeHandle::Qemu { child, .. } => child.id(),
-            // VM/sandbox runtimes don't expose a simple PID
-            RuntimeHandle::Firecracker { .. } | RuntimeHandle::Sandbox { .. } => None,
+            // VM/sandbox/container runtimes don't expose a simple PID
+            RuntimeHandle::Firecracker { .. }
+            | RuntimeHandle::Sandbox { .. }
+            | RuntimeHandle::Quark { .. } => None,
         }
     }
 
@@ -264,53 +291,25 @@ impl RuntimeHandle {
 
                 Ok(())
             }
-            RuntimeHandle::Sandbox {
-                container_id,
-                bundle_path,
-                state_dir,
-                socket,
-            } => {
-                // For gVisor sandbox, use runsc commands to stop and clean up
+            RuntimeHandle::Quark { name, socket } | RuntimeHandle::Sandbox { name, socket } => {
+                // Container runtimes (quark, gVisor) run via docker; the
+                // container is owned by the daemon, so stop+remove it by name.
                 #[cfg(target_os = "linux")]
                 {
                     use tokio::process::Command;
-
-                    // Kill the container: runsc kill <id> SIGKILL
-                    let _ = Command::new("runsc")
-                        .arg("kill")
-                        .arg("--root")
-                        .arg(&state_dir)
-                        .arg(&container_id)
-                        .arg("SIGKILL")
+                    let _ = Command::new("docker")
+                        .arg("rm")
+                        .arg("-f")
+                        .arg(name.as_str())
                         .output()
                         .await;
-
-                    // Wait briefly for cleanup
-                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-
-                    // Delete the container: runsc delete <id>
-                    let _ = Command::new("runsc")
-                        .arg("delete")
-                        .arg("--root")
-                        .arg(&state_dir)
-                        .arg("--force")
-                        .arg(&container_id)
-                        .output()
-                        .await;
-
-                    // Clean up bundle directory
-                    std::fs::remove_dir_all(&bundle_path).ok();
-
-                    // Clean up socket
-                    std::fs::remove_file(&socket).ok();
-
-                    Ok(())
+                    std::fs::remove_file(socket).ok();
                 }
                 #[cfg(not(target_os = "linux"))]
                 {
-                    let _ = (container_id, bundle_path, state_dir, socket);
-                    anyhow::bail!("Sandbox (gVisor) only supported on Linux")
+                    let _ = (name, socket);
                 }
+                Ok(())
             }
         }
     }
@@ -378,41 +377,21 @@ impl RuntimeHandle {
                 // try_wait returns Ok(Some(status)) if exited, Ok(None) if still running
                 matches!(child.try_wait(), Ok(None))
             }
-            RuntimeHandle::Sandbox {
-                container_id,
-                state_dir,
-                ..
-            } => {
-                // Use runsc state to check if container is running
+            RuntimeHandle::Quark { name, .. } | RuntimeHandle::Sandbox { name, .. } => {
+                // Container runtimes (quark, gVisor): ask docker.
                 #[cfg(target_os = "linux")]
                 {
                     use tokio::process::Command;
-
-                    let output = Command::new("runsc")
-                        .arg("state")
-                        .arg("--root")
-                        .arg(&state_dir)
-                        .arg(&container_id)
+                    let out = Command::new("docker")
+                        .args(["inspect", "-f", "{{.State.Running}}", name.as_str()])
                         .output()
                         .await;
-
-                    match output {
-                        Ok(o) if o.status.success() => {
-                            // Parse JSON output, check status == "running"
-                            if let Ok(state) =
-                                serde_json::from_slice::<serde_json::Value>(&o.stdout)
-                            {
-                                state["status"] == "running"
-                            } else {
-                                false
-                            }
-                        }
-                        _ => false,
-                    }
+                    matches!(out, Ok(o) if o.status.success()
+                        && String::from_utf8_lossy(&o.stdout).trim() == "true")
                 }
                 #[cfg(not(target_os = "linux"))]
                 {
-                    let _ = (container_id, state_dir);
+                    let _ = name;
                     false
                 }
             }
@@ -420,8 +399,19 @@ impl RuntimeHandle {
     }
 }
 
-/// Configuration for spawning an instance
+/// A host->guest bind mount (used by OCI runtimes like Quark).
 #[derive(Debug, Clone)]
+pub struct Mount {
+    /// Host source path
+    pub source: PathBuf,
+    /// Guest destination path (absolute, inside the rootfs)
+    pub destination: PathBuf,
+    /// Mount read-only
+    pub readonly: bool,
+}
+
+/// Configuration for spawning an instance
+#[derive(Debug, Clone, Default)]
 pub struct SpawnConfig {
     /// Command to run (for process runtime)
     pub command: String,
@@ -433,12 +423,23 @@ pub struct SpawnConfig {
     pub socket: PathBuf,
     /// Working directory
     pub workdir: Option<PathBuf>,
-    /// Root filesystem to chroot/pivot_root into (Linux namespace runtime).
-    /// When set, the runtime enters the mount namespace, chroots into this path,
-    /// and chdirs to `workdir` *inside* the new root. Path must exist on the host.
-    pub rootfs: Option<PathBuf>,
     /// Firecracker-specific config
     pub vm_config: Option<VmConfig>,
+    /// Bundle rootfs to boot as the guest root (Quark / OCI runtimes).
+    /// For the Linux namespace runtime, this path becomes the chroot and
+    /// `workdir` is interpreted inside the new root.
+    pub rootfs: Option<PathBuf>,
+    /// Host->guest bind mounts (Quark): e.g. app data dir -> /data.
+    pub mounts: Vec<Mount>,
+    /// OCI image reference to run (container runtimes that go through
+    /// docker/containerd, e.g. Quark via `docker run --runtime=quark`).
+    pub image: Option<String>,
+    /// Memory limit in MB for container runtimes. Process-like runtimes use
+    /// Tenement's cgroup manager instead.
+    pub memory_limit_mb: Option<u32>,
+    /// CPU weight/shares for container runtimes. Process-like runtimes use
+    /// Tenement's cgroup manager instead.
+    pub cpu_shares: Option<u32>,
 }
 
 /// Firecracker VM configuration
@@ -502,6 +503,7 @@ mod tests {
         assert_eq!(RuntimeType::Namespace.to_string(), "namespace");
         assert_eq!(RuntimeType::Sandbox.to_string(), "sandbox");
         assert_eq!(RuntimeType::Litebox.to_string(), "litebox");
+        assert_eq!(RuntimeType::Quark.to_string(), "quark");
         assert_eq!(RuntimeType::Firecracker.to_string(), "firecracker");
         assert_eq!(RuntimeType::Qemu.to_string(), "qemu");
     }
@@ -528,6 +530,7 @@ mod tests {
             "litebox".parse::<RuntimeType>().unwrap(),
             RuntimeType::Litebox
         );
+        assert_eq!("quark".parse::<RuntimeType>().unwrap(), RuntimeType::Quark);
         assert_eq!(
             "firecracker".parse::<RuntimeType>().unwrap(),
             RuntimeType::Firecracker
@@ -545,6 +548,11 @@ mod tests {
             "SANDBOX".parse::<RuntimeType>().unwrap(),
             RuntimeType::Sandbox
         );
+        assert_eq!(
+            "LITEBOX".parse::<RuntimeType>().unwrap(),
+            RuntimeType::Litebox
+        );
+        assert_eq!("QUARK".parse::<RuntimeType>().unwrap(), RuntimeType::Quark);
         assert_eq!("QEMU".parse::<RuntimeType>().unwrap(), RuntimeType::Qemu);
         assert!("invalid".parse::<RuntimeType>().is_err());
     }
@@ -563,6 +571,14 @@ mod tests {
         let json_sandbox = serde_json::to_string(&rt_sandbox).unwrap();
         assert_eq!(json_sandbox, "\"sandbox\"");
 
+        let rt_litebox = RuntimeType::Litebox;
+        let json_litebox = serde_json::to_string(&rt_litebox).unwrap();
+        assert_eq!(json_litebox, "\"litebox\"");
+
+        let rt_quark = RuntimeType::Quark;
+        let json_quark = serde_json::to_string(&rt_quark).unwrap();
+        assert_eq!(json_quark, "\"quark\"");
+
         let rt_qemu = RuntimeType::Qemu;
         let json_qemu = serde_json::to_string(&rt_qemu).unwrap();
         assert_eq!(json_qemu, "\"qemu\"");
@@ -576,11 +592,11 @@ mod tests {
         let parsed_sandbox: RuntimeType = serde_json::from_str("\"sandbox\"").unwrap();
         assert_eq!(parsed_sandbox, RuntimeType::Sandbox);
 
-        let rt_litebox = RuntimeType::Litebox;
-        let json_litebox = serde_json::to_string(&rt_litebox).unwrap();
-        assert_eq!(json_litebox, "\"litebox\"");
         let parsed_litebox: RuntimeType = serde_json::from_str("\"litebox\"").unwrap();
         assert_eq!(parsed_litebox, RuntimeType::Litebox);
+
+        let parsed_quark: RuntimeType = serde_json::from_str("\"quark\"").unwrap();
+        assert_eq!(parsed_quark, RuntimeType::Quark);
 
         let parsed_qemu: RuntimeType = serde_json::from_str("\"qemu\"").unwrap();
         assert_eq!(parsed_qemu, RuntimeType::Qemu);

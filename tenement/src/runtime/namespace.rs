@@ -257,6 +257,7 @@ mod tests {
             workdir: None,
             rootfs: None,
             vm_config: None,
+            ..Default::default()
         };
 
         let result = runtime.spawn(&config).await;
@@ -282,6 +283,7 @@ mod tests {
             workdir: Some(PathBuf::from("/app")),
             rootfs: Some(PathBuf::from("/nonexistent/tenement/rootfs-xyz")),
             vm_config: None,
+            ..Default::default()
         };
 
         let err = runtime.spawn(&config).await.unwrap_err().to_string();
@@ -305,6 +307,7 @@ mod tests {
             workdir: None,
             rootfs: None,
             vm_config: None,
+            ..Default::default()
         };
 
         let mut handle = runtime.spawn(&config).await.unwrap();

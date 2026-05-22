@@ -271,14 +271,12 @@ impl Runtime for QemuRuntime {
 
         // CPU and memory
         cmd.arg("-accel").arg(accel);
-        cmd.arg("-cpu")
-            .arg(if accel == "hvf" && cfg!(target_arch = "x86_64") {
-                "host"
-            } else if accel == "kvm" {
-                "host"
-            } else {
-                "max"
-            });
+        let cpu_model = if accel == "kvm" || (accel == "hvf" && cfg!(target_arch = "x86_64")) {
+            "host"
+        } else {
+            "max"
+        };
+        cmd.arg("-cpu").arg(cpu_model);
         cmd.arg("-smp").arg(vm_config.vcpus.to_string());
         cmd.arg("-m").arg(format!("{}M", vm_config.memory_mb));
 
@@ -417,6 +415,7 @@ mod tests {
             workdir: None,
             rootfs: None,
             vm_config: None,
+            ..Default::default()
         };
 
         let result = runtime.spawn(&config).await;
