@@ -316,6 +316,6 @@ mod tests {
         assert!(handle.vsock_port().is_none());
 
         // Clean up
-        handle.kill().await.ok();
+        handle.kill(std::time::Duration::from_secs(1)).await.ok();
     }
 }
