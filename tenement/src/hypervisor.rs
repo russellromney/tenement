@@ -396,7 +396,9 @@ impl Hypervisor {
                 .create_cgroup(&instance_id.to_string(), &resource_limits)
             {
                 // Kill the already-spawned child and clean up spawning guard
-                let _ = handle.kill().await;
+                let _ = handle
+                    .kill(Duration::from_secs(process_config.stop_grace_period_secs))
+                    .await;
                 self.spawning.write().await.remove(&instance_id);
                 return Err(e).with_context(|| {
                     format!(
@@ -411,7 +413,9 @@ impl Hypervisor {
                     self.cgroup_manager
                         .add_process(&instance_id.to_string(), pid, &resource_limits)
                 {
-                    let _ = handle.kill().await;
+                    let _ = handle
+                        .kill(Duration::from_secs(process_config.stop_grace_period_secs))
+                        .await;
                     self.spawning.write().await.remove(&instance_id);
                     return Err(e).with_context(|| format!(
                         "Failed to add process to cgroup for {}. Resource limits will not be enforced.", instance_id
@@ -669,9 +673,18 @@ impl Hypervisor {
         if let Some(mut instance) = instances.remove(&instance_id) {
             info!("Stopping instance {}", instance_id);
 
+            // Graceful stop window from the service config (default 10s if the
+            // service is somehow no longer defined).
+            let grace = Duration::from_secs(
+                self.config
+                    .get_service(process_name)
+                    .map(|c| c.stop_grace_period_secs)
+                    .unwrap_or(10),
+            );
+
             instance
                 .handle
-                .kill()
+                .kill(grace)
                 .await
                 .with_context(|| format!("Failed to kill process: {}", instance_id))?;
 
@@ -1686,6 +1699,7 @@ mod tests {
             idle_timeout: None,
             startup_timeout: 5,
             request_timeout: 30,
+            stop_grace_period_secs: 10,
             memory_limit_mb: None,
             cpu_shares: None,
             kernel: None,
@@ -2555,6 +2569,7 @@ sleep 30
                 idle_timeout: None,
                 startup_timeout: 5,
                 request_timeout: 30,
+                stop_grace_period_secs: 10,
                 memory_limit_mb: None,
                 cpu_shares: None,
                 kernel: None,

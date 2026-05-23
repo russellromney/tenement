@@ -35,6 +35,7 @@ pub fn test_config_with_process(name: &str, command: &str, args: Vec<&str>) -> C
         idle_timeout: None,
         startup_timeout: 5,
         request_timeout: 30,
+        stop_grace_period_secs: 10,
         memory_limit_mb: None,
         cpu_shares: None,
         kernel: None,
