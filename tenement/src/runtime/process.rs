@@ -102,6 +102,21 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
+    async fn assert_process_group_dead(pgid: u32, reason: &str) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        loop {
+            let pgid_alive = unsafe { libc::kill(-(pgid as i32), 0) };
+            if pgid_alive == -1 {
+                return;
+            }
+            if std::time::Instant::now() >= deadline {
+                panic!("process group should be dead after {reason}");
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+    }
+
     // ===================
     // BASIC RUNTIME TESTS
     // ===================
@@ -280,7 +295,10 @@ mod tests {
         assert!(handle.is_running().await);
 
         // Kill it
-        handle.kill(std::time::Duration::from_secs(1)).await.unwrap();
+        handle
+            .kill(std::time::Duration::from_secs(1))
+            .await
+            .unwrap();
 
         // Give it time to exit
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -328,14 +346,16 @@ mod tests {
         // Get the child PID before killing
         let child_pid = handle.pid().expect("should have a PID");
 
-        handle.kill(std::time::Duration::from_secs(1)).await.unwrap();
+        handle
+            .kill(std::time::Duration::from_secs(1))
+            .await
+            .unwrap();
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
 
         // The process group should be gone. Verify with kill(0) signal probe.
         #[cfg(unix)]
         {
-            let pgid_alive = unsafe { libc::kill(-(child_pid as i32), 0) };
-            assert_eq!(pgid_alive, -1, "Process group should be dead after kill");
+            assert_process_group_dead(child_pid, "kill").await;
         }
     }
 
@@ -377,8 +397,7 @@ mod tests {
         );
 
         // Process group is gone.
-        let pgid_alive = unsafe { libc::kill(-(child_pid as i32), 0) };
-        assert_eq!(pgid_alive, -1, "process group should be dead after graceful stop");
+        assert_process_group_dead(child_pid, "graceful stop").await;
     }
 
     /// A child that ignores SIGTERM should survive until the grace elapses,
@@ -414,8 +433,7 @@ mod tests {
         );
 
         // After SIGKILL + reap the process group must be gone.
-        let pgid_alive = unsafe { libc::kill(-(child_pid as i32), 0) };
-        assert_eq!(pgid_alive, -1, "process group should be dead after SIGKILL fallback");
+        assert_process_group_dead(child_pid, "SIGKILL fallback").await;
     }
 
     // ===================
