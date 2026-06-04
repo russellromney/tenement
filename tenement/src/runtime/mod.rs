@@ -207,20 +207,57 @@ impl RuntimeHandle {
         }
     }
 
-    /// Kill the underlying process/VM
-    pub async fn kill(&mut self) -> Result<()> {
+    /// Stop the underlying process/VM gracefully, then force-kill on timeout.
+    ///
+    /// `grace` is the bounded window the instance gets to flush state and exit
+    /// after the graceful stop signal:
+    /// - **Process/Namespace/Litebox**: SIGTERM the process group, poll for exit
+    ///   up to `grace`, then SIGKILL + reap if still alive.
+    /// - **Quark/Sandbox**: `docker stop -t <grace_secs>` (Docker sends SIGTERM,
+    ///   waits, then SIGKILL), then best-effort `docker rm -f`.
+    /// - **Qemu/Firecracker**: already attempt a graceful shutdown of their own;
+    ///   `grace` is unused for them.
+    pub async fn kill(&mut self, grace: std::time::Duration) -> Result<()> {
         match self {
             RuntimeHandle::Process { child, .. }
             | RuntimeHandle::Namespace { child, .. }
             | RuntimeHandle::Litebox { child, .. } => {
-                // Kill the entire process group (child + all descendants)
+                // Graceful stop: SIGTERM the whole process group (child + all
+                // descendants), then give it `grace` to exit before SIGKILL.
+                #[cfg(unix)]
+                if let Some(pid) = child.id() {
+                    unsafe {
+                        libc::kill(-(pid as i32), libc::SIGTERM);
+                    }
+
+                    // Poll for a clean exit at ~100ms intervals up to `grace`.
+                    let deadline = std::time::Instant::now() + grace;
+                    loop {
+                        match child.try_wait() {
+                            Ok(Some(_)) => {
+                                // Exited on its own; reap and we're done.
+                                let _ = child.wait().await;
+                                return Ok(());
+                            }
+                            Ok(None) => {
+                                if std::time::Instant::now() >= deadline {
+                                    break;
+                                }
+                                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                            }
+                            // Already reaped / unknown error: nothing more to do.
+                            Err(_) => return Ok(()),
+                        }
+                    }
+                }
+
+                // Fallback: grace elapsed (or non-unix). Force-kill the group and reap.
                 #[cfg(unix)]
                 if let Some(pid) = child.id() {
                     unsafe {
                         libc::kill(-(pid as i32), libc::SIGKILL);
                     }
                 }
-                // Also kill via tokio handle and reap the zombie
                 let _ = child.kill().await;
                 let _ = child.wait().await;
                 Ok(())
@@ -293,10 +330,23 @@ impl RuntimeHandle {
             }
             RuntimeHandle::Quark { name, socket } | RuntimeHandle::Sandbox { name, socket } => {
                 // Container runtimes (quark, gVisor) run via docker; the
-                // container is owned by the daemon, so stop+remove it by name.
+                // container is owned by the daemon, so stop it gracefully by name.
                 #[cfg(target_os = "linux")]
                 {
                     use tokio::process::Command;
+                    // `docker stop -t <secs>` sends SIGTERM, waits up to <secs>,
+                    // then SIGKILL. Containers run with `--rm`, so a clean stop
+                    // auto-removes them (and avoids the hard-kill re-spawn race).
+                    let grace_secs = grace.as_secs().to_string();
+                    let _ = Command::new("docker")
+                        .arg("stop")
+                        .arg("-t")
+                        .arg(&grace_secs)
+                        .arg(name.as_str())
+                        .output()
+                        .await;
+                    // Best-effort cleanup in case `--rm` didn't fire (e.g. the
+                    // container was already gone, or not started with --rm).
                     let _ = Command::new("docker")
                         .arg("rm")
                         .arg("-f")
@@ -307,7 +357,7 @@ impl RuntimeHandle {
                 }
                 #[cfg(not(target_os = "linux"))]
                 {
-                    let _ = (name, socket);
+                    let _ = (name, socket, grace);
                 }
                 Ok(())
             }

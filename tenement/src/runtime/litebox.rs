@@ -291,7 +291,7 @@ mod tests {
             }
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         }
-        handle.kill().await.ok();
+        handle.kill(std::time::Duration::from_secs(1)).await.ok();
         let lines: Vec<&str> = argv.lines().collect();
         assert_eq!(lines.first(), Some(&"run"), "argv: {argv:?}");
         assert!(lines.contains(&"--rootfs"), "argv: {argv:?}");

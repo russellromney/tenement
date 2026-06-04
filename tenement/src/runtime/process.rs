@@ -102,6 +102,21 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
+    async fn assert_process_group_dead(pgid: u32, reason: &str) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        loop {
+            let pgid_alive = unsafe { libc::kill(-(pgid as i32), 0) };
+            if pgid_alive == -1 {
+                return;
+            }
+            if std::time::Instant::now() >= deadline {
+                panic!("process group should be dead after {reason}");
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+    }
+
     // ===================
     // BASIC RUNTIME TESTS
     // ===================
@@ -150,7 +165,7 @@ mod tests {
         assert!(handle.vsock_port().is_none());
 
         // Clean up
-        handle.kill().await.ok();
+        handle.kill(std::time::Duration::from_secs(1)).await.ok();
     }
 
     #[tokio::test]
@@ -211,7 +226,7 @@ mod tests {
         // Old socket should be removed (though new one may not exist yet)
         // The socket is created by the spawned process, not by the runtime
 
-        handle.kill().await.ok();
+        handle.kill(std::time::Duration::from_secs(1)).await.ok();
         std::fs::remove_file(&socket_path).ok();
     }
 
@@ -245,7 +260,7 @@ mod tests {
         let mut handle = runtime.spawn(&config).await.unwrap();
         assert_eq!(handle.socket(), &socket_path);
 
-        handle.kill().await.ok();
+        handle.kill(std::time::Duration::from_secs(1)).await.ok();
     }
 
     #[tokio::test]
@@ -262,7 +277,7 @@ mod tests {
         assert!(pid.is_some());
         assert!(pid.unwrap() > 0);
 
-        handle.kill().await.ok();
+        handle.kill(std::time::Duration::from_secs(1)).await.ok();
     }
 
     #[tokio::test]
@@ -280,7 +295,10 @@ mod tests {
         assert!(handle.is_running().await);
 
         // Kill it
-        handle.kill().await.unwrap();
+        handle
+            .kill(std::time::Duration::from_secs(1))
+            .await
+            .unwrap();
 
         // Give it time to exit
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -297,7 +315,7 @@ mod tests {
         let mut handle = runtime.spawn(&config).await.unwrap();
         assert!(handle.is_running().await);
 
-        let result = handle.kill().await;
+        let result = handle.kill(std::time::Duration::from_secs(1)).await;
         assert!(result.is_ok());
 
         // Give it time to exit
@@ -328,15 +346,94 @@ mod tests {
         // Get the child PID before killing
         let child_pid = handle.pid().expect("should have a PID");
 
-        handle.kill().await.unwrap();
+        handle
+            .kill(std::time::Duration::from_secs(1))
+            .await
+            .unwrap();
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
 
         // The process group should be gone. Verify with kill(0) signal probe.
         #[cfg(unix)]
         {
-            let pgid_alive = unsafe { libc::kill(-(child_pid as i32), 0) };
-            assert_eq!(pgid_alive, -1, "Process group should be dead after kill");
+            assert_process_group_dead(child_pid, "kill").await;
         }
+    }
+
+    // ===========================
+    // GRACEFUL STOP TESTS
+    // ===========================
+
+    /// A child that installs a SIGTERM handler and exits promptly should be
+    /// reaped within the grace window — no SIGKILL needed. We assert this by
+    /// measuring that kill() returns well before the grace elapses.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn test_kill_graceful_term_handler_exits_within_grace() {
+        let runtime = ProcessRuntime::new();
+        // Install a TERM trap that exits 0 promptly, then sleep forever.
+        let config = test_spawn_config(
+            "sh",
+            vec!["-c", "trap 'exit 0' TERM; sleep 300"],
+            PathBuf::from("/tmp/test-graceful-term.sock"),
+        );
+
+        let mut handle = runtime.spawn(&config).await.unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        assert!(handle.is_running().await);
+        let child_pid = handle.pid().expect("should have a PID");
+
+        // Generous grace so we can prove we did NOT wait it out.
+        let grace = std::time::Duration::from_secs(5);
+        let start = std::time::Instant::now();
+        handle.kill(grace).await.unwrap();
+        let elapsed = start.elapsed();
+
+        // It handled SIGTERM and exited; we should have returned long before
+        // the 5s grace (well under it, allowing for the 100ms poll interval).
+        assert!(
+            elapsed < std::time::Duration::from_secs(2),
+            "graceful child should be reaped quickly via SIGTERM, took {:?}",
+            elapsed
+        );
+
+        // Process group is gone.
+        assert_process_group_dead(child_pid, "graceful stop").await;
+    }
+
+    /// A child that ignores SIGTERM should survive until the grace elapses,
+    /// then be SIGKILLed and reaped. We assert kill() takes at least the grace.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn test_kill_ignored_term_falls_back_to_sigkill_after_grace() {
+        let runtime = ProcessRuntime::new();
+        // Ignore TERM entirely, then sleep forever. Only SIGKILL can stop it.
+        let config = test_spawn_config(
+            "sh",
+            vec!["-c", "trap '' TERM; sleep 300"],
+            PathBuf::from("/tmp/test-ignored-term.sock"),
+        );
+
+        let mut handle = runtime.spawn(&config).await.unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        assert!(handle.is_running().await);
+        let child_pid = handle.pid().expect("should have a PID");
+
+        // Short grace so the test stays fast.
+        let grace = std::time::Duration::from_secs(1);
+        let start = std::time::Instant::now();
+        handle.kill(grace).await.unwrap();
+        let elapsed = start.elapsed();
+
+        // It ignored SIGTERM, so we had to wait out the full grace before
+        // SIGKILL. Allow small slack below 1s for timer granularity.
+        assert!(
+            elapsed >= std::time::Duration::from_millis(900),
+            "ignored-TERM child should wait out the grace before SIGKILL, took {:?}",
+            elapsed
+        );
+
+        // After SIGKILL + reap the process group must be gone.
+        assert_process_group_dead(child_pid, "SIGKILL fallback").await;
     }
 
     // ===================
@@ -365,7 +462,7 @@ mod tests {
 
         // Clean up
         for handle in &mut handles {
-            handle.kill().await.ok();
+            handle.kill(std::time::Duration::from_secs(1)).await.ok();
         }
     }
 

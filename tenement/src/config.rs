@@ -247,6 +247,13 @@ pub struct ProcessConfig {
     #[serde(default = "default_request_timeout")]
     pub request_timeout: u64,
 
+    /// Graceful stop period in seconds (default: 10)
+    /// On stop, the instance is sent SIGTERM (or `docker stop -t`) and given
+    /// this long to flush state and exit before being SIGKILLed. Lets apps
+    /// (and Tinyhost/Cinch) checkpoint before the process is gone.
+    #[serde(default = "default_stop_grace_period_secs")]
+    pub stop_grace_period_secs: u64,
+
     // --- Resource limits (cgroups v2 on Linux) ---
     /// Memory limit in MB (0 = unlimited)
     /// Applied via cgroups v2 on Linux for process/namespace/sandbox isolation.
@@ -325,6 +332,10 @@ fn default_startup_timeout() -> u64 {
 
 fn default_request_timeout() -> u64 {
     30
+}
+
+fn default_stop_grace_period_secs() -> u64 {
+    10
 }
 
 /// Routing configuration
@@ -1255,6 +1266,46 @@ command = "./api"
 
         // Default is 10 seconds
         assert_eq!(api.startup_timeout, 10);
+    }
+
+    #[test]
+    fn test_stop_grace_period_default() {
+        let config_str = r#"
+[service.api]
+command = "./api"
+"#;
+        let config = Config::from_str(config_str).unwrap();
+        let api = config.get_service("api").unwrap();
+
+        // Default graceful stop window is 10 seconds.
+        assert_eq!(api.stop_grace_period_secs, 10);
+    }
+
+    #[test]
+    fn test_stop_grace_period_config() {
+        let config_str = r#"
+[service.api]
+command = "./api"
+stop_grace_period_secs = 30
+"#;
+        let config = Config::from_str(config_str).unwrap();
+        let api = config.get_service("api").unwrap();
+
+        assert_eq!(api.stop_grace_period_secs, 30);
+    }
+
+    #[test]
+    fn test_stop_grace_period_zero() {
+        // 0 means: SIGTERM then immediately SIGKILL (no wait).
+        let config_str = r#"
+[service.api]
+command = "./api"
+stop_grace_period_secs = 0
+"#;
+        let config = Config::from_str(config_str).unwrap();
+        let api = config.get_service("api").unwrap();
+
+        assert_eq!(api.stop_grace_period_secs, 0);
     }
 
     #[test]
